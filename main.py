@@ -1,11 +1,11 @@
 import asyncio
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import Column, Integer, String, Boolean, UniqueConstraint
+from sqlalchemy.orm import declarative_base
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
 import os
 from dotenv import load_dotenv
-from models import User,Base, ROLE_NAMES, ROLE_TO_MODEL
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -16,21 +16,74 @@ from telegram.ext import (
     ContextTypes
 )
 
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = 'users'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, unique=True, nullable=False)
+    first_name = Column(String, nullable=False)
+    last_name = Column(String)
+    username = Column(String)
+    admin = Column(Boolean, default=False)
+    
+    __table_args__ = (UniqueConstraint('user_id', name='uq_user_id'),)
+    
+    def __repr__(self):
+        return f"<User(id={self.id}, tg_id={self.user_id}, name='{self.first_name}', admin={self.admin})>"
+    
+class RegistrationBase(Base):
+    __abstract__ = True
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, unique=True, nullable=False)
+    first_name = Column(String, nullable=False)
+    last_name = Column(String)
+    username = Column(String)
+    id_ml = Column(Integer)  
+    
+class Middle(RegistrationBase):
+    __tablename__ = 'middle'
+
+class Exp(RegistrationBase):
+    __tablename__ = 'exp'
+
+class Les(RegistrationBase):
+    __tablename__ = 'les'
+
+class Roam(RegistrationBase):
+    __tablename__ = 'roam'
+
+class Adk(RegistrationBase):
+    __tablename__ = 'adk'
+
+class Moderator(RegistrationBase):
+    __tablename__ = 'moderator'
+
+ROLE_NAMES = {
+    "middle": "Мидл",
+    "exp": "Экспа",
+    "les": "Лес",
+    "roam": "Роум",
+    "adk": "Адк",
+    "moderator": "Модератор",
+}
+
+ROLE_TO_MODEL = {
+    "middle": Middle,
+    "exp": Exp,
+    "les": Les,
+    "roam": Roam,
+    "adk": Adk,
+    "moderator": Moderator,
+}
+
 load_dotenv()
 
 DB_NAME = "bot_users.db"
 engine = create_engine(f'sqlite:///{DB_NAME}')
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
-
-def escape_markdown_v2(text: str) -> str:
-    """Экранирует все специальные символы для MarkdownV2 по спецификации Telegram"""
-    if not text:
-        return ""
-    escape_chars = "_*[]()~`>#+-=|{}.!"
-    for char in escape_chars:
-        text = text.replace(char, f"\\{char}")
-    return text
 
 def get_all_users_sync():
     session = Session()
@@ -54,7 +107,6 @@ async def get_role_users(role_key: str):
     return await asyncio.to_thread(get_role_users_sync, model)
 
 def find_user_by_username_sync(username: str):
-    """Ищет пользователя в основной таблице по username (без @)"""
     if not username:
         return None
     clean_username = username.lstrip('@')
@@ -70,7 +122,6 @@ async def find_user_by_username(username: str):
 def add_user_to_role_sync(role_model, user: User, id_ml: int):
     session = Session()
     try:
-        
         existing = session.query(role_model).filter_by(user_id=user.user_id).first()
         if existing:
             raise ValueError("Пользователь уже зарегистрирован в этой роли")
@@ -95,7 +146,6 @@ async def add_user_to_role(role_key: str, user: User, id_ml: int):
     return await asyncio.to_thread(add_user_to_role_sync, model, user, id_ml)
 
 def is_user_admin_sync(user_id: int) -> bool:
-    """Проверяет, является ли пользователь админом в БД"""
     session = Session()
     try:
         user = session.query(User).filter_by(user_id=user_id).first()
@@ -144,14 +194,11 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
     result = update.chat_member
     new_member = result.new_chat_member
 
-    
     if new_member.user.id == context.bot.id:
         if new_member.status == "member":
-            
             await update.effective_chat.send_message("✅ Привет! Я запишу всех участников при их первом сообщении.")
         return
 
-    
     if new_member.status not in ["left", "kicked"]:
         user = new_member.user
         try:
@@ -159,7 +206,7 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
                 chat_id=update.effective_chat.id,
                 user_id=user.id
             )
-            is_admin = chat_member.status in ["creator", "administrator"]
+            is_admin = (chat_member.status == "creator")
         except Exception:
             is_admin = False
 
@@ -172,7 +219,6 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
         )
         
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    
     if update.effective_chat.type != "private":
         await update.message.reply_text(
             "❌ Эта команда доступна только в личных сообщениях с ботом."
@@ -181,7 +227,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = update.effective_user.id
 
-    
     if not await is_user_admin(user_id):
         await update.message.reply_text(
             "❌ У вас нет прав на использование этой команды. "
@@ -204,7 +249,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         member = await context.bot.get_chat_member(chat.id, user.id)
-        is_admin = member.status in ("creator", "administrator")
+        is_admin = member.status in ("creator")
     except Exception:
         is_admin = False
 
@@ -215,14 +260,11 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         username=user.username,
         is_admin=is_admin
     )
-
     
     if is_admin:
         context.bot_data["last_admin_group_id"] = chat.id
 
 async def all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /all - выводит всех пользователей из БД с нумерацией"""
-    
     if update.effective_chat.type != "private":
         await update.message.reply_text(
             "❌ Эта команда доступна только в личных сообщениях с ботом."
@@ -231,7 +273,6 @@ async def all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = update.effective_user.id
 
-    
     if not await is_user_admin(user_id):
         await update.message.reply_text(
             "❌ У вас нет прав на использование этой команды. "
@@ -239,7 +280,6 @@ async def all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    
     users = await get_all_users()
     if not users:
         await update.message.reply_text("Нет зарегистрированных пользователей.")
@@ -248,39 +288,15 @@ async def all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total = len(users)
     admin_count = sum(1 for user in users if user.admin)
     
-    
-    header = f"👥 *Список пользователей (всего: {total}, админов: {admin_count})*"
-    header = header.replace('(', '\\(').replace(')', '\\)')
-    message = f"{header}\n\n"
+    message = f"👥 Список пользователей (всего: {total}, админов: {admin_count})\n\n"
     
     for idx, user in enumerate(users):
-        
-        first_name = escape_markdown_v2(user.first_name)
-        last_name = escape_markdown_v2(user.last_name) if user.last_name else ""
-        username = escape_markdown_v2(user.username) if user.username else ""
+        full_name = f"{user.first_name} {user.last_name or ''}".strip() or "Не указано имя"
+        username = f"@{user.username}" if user.username else "нет username"
         admin_status = "✅ Админ" if user.admin else "❌ Не админ"
-        
-        
-        full_name = f"{first_name} {last_name}".strip()
-        if not full_name:
-            full_name = "Не указано имя"
-        
-        
-        if username:
-            user_str = f"{idx+1}. `{user.user_id}` | {full_name} (@{username}) - {admin_status}"
-        else:
-            user_str = f"{idx+1}. `{user.user_id}` | {full_name} - {admin_status}"
-        
-        
-        user_str = escape_markdown_v2(user_str)
-        
-        message += f"• {user_str}\n"
+        message += f"{idx+1}. ID: {user.user_id} | {full_name} ({username}) - {admin_status}\n"
     
-    await update.message.reply_text(
-        message,
-        parse_mode=ParseMode.MARKDOWN_V2,
-        disable_web_page_preview=True
-    )
+    await update.message.reply_text(message)
 
 async def view_role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -292,16 +308,16 @@ async def view_role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     users = await get_role_users(role_key)
-    text = f"👥 *{ROLE_NAMES[role_key]}*\n\n"
+    text = f"👥 {ROLE_NAMES[role_key]}\n\n"
     if not users:
         text += "Пока никто не зарегистрирован."
     else:
         for u in users:
-            name = f"{u.first_name} {u.last_name or ''}".strip()
+            name = f"{u.first_name} {u.last_name or ''}".strip() or "Не указано имя"
             tag = f"@{u.username}" if u.username else "нет username"
-            text += f"• {name} ({tag}) — ID: {u.id_ml or 'не указан'}\n"
+            id_ml = u.id_ml or "не указан"
+            text += f"• {name} ({tag}) — ID: {id_ml}\n"
 
-    
     keyboard = [
         [
             InlineKeyboardButton("➕ Добавить", callback_data=f"add_to:{role_key}"),
@@ -309,12 +325,8 @@ async def view_role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [InlineKeyboardButton("⬅ Назад", callback_data="back_to_roles")]
     ]
-    await query.edit_message_text(
-        text,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
 def remove_user_from_role_sync(role_model, user_id: int):
     session = Session()
     try:
@@ -344,8 +356,7 @@ async def add_to_role_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
 
     await query.edit_message_text(
-        f"Введите username пользователя (начинается с @), которого хотите добавить в *{ROLE_NAMES[role_key]}*:",
-        parse_mode=ParseMode.MARKDOWN
+        f"Введите username пользователя (начинается с @), которого хотите добавить в {ROLE_NAMES[role_key]}:"
     )
 
 async def del_from_role_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -359,18 +370,14 @@ async def del_from_role_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     })
 
     await query.edit_message_text(
-        f"Введите username пользователя (начинается с @), которого хотите удалить из *{ROLE_NAMES[role_key]}*:",
-        parse_mode=ParseMode.MARKDOWN
+        f"Введите username пользователя (начинается с @), которого хотите удалить из {ROLE_NAMES[role_key]}:"
     )
     
 async def handle_registration_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    
     if not await is_user_admin(user_id):
-        await update.message.reply_text(
-            "❌ У вас нет прав на использование этой команды. "
-        )
+        await update.message.reply_text("❌ У вас нет прав на использование этой команды.")
         return
 
     state = context.user_data.get("reg_state")
@@ -383,7 +390,6 @@ async def handle_registration_input(update: Update, context: ContextTypes.DEFAUL
 
     text = update.message.text.strip()
 
-    
     if state == "awaiting_username":
         if not text.startswith('@'):
             await update.message.reply_text("❌ Username должен начинаться с @. Попробуйте снова.")
@@ -399,18 +405,24 @@ async def handle_registration_input(update: Update, context: ContextTypes.DEFAUL
         context.user_data["reg_candidate_user"] = user
         context.user_data["reg_state"] = "awaiting_idml"
 
+        full_name = f"{user.first_name} {user.last_name or ''}".strip()
         await update.message.reply_text(
-            f"Найден: *{user.first_name} {user.last_name or ''}* (@{user.username})\n"
-            "Теперь введите его игровой ID в Mobile Legends (только цифры):",
-            parse_mode=ParseMode.MARKDOWN
+            f"Найден: {full_name} (@{user.username})\n"
+            "Теперь введите его игровой ID в Mobile Legends (только цифры):"
         )
 
     elif state == "awaiting_idml":
-        if not text.isdigit():
-            await update.message.reply_text("❌ ID должен быть числом. Попробуйте снова.")
+        try:
+            id_ml = int(text)
+            if id_ml <= 0:
+                raise ValueError("ID должен быть положительным")
+        except (ValueError, TypeError):
+            await update.message.reply_text(
+                "❌ ID должен быть положительным целым числом (например: 123456789). "
+                "Пожалуйста, введите только цифры без пробелов, букв или символов."
+            )
             return
 
-        id_ml = int(text)
         candidate = context.user_data.get("reg_candidate_user")
         if not candidate:
             await update.message.reply_text("❌ Ошибка: кандидат не найден. Начните сначала.")
@@ -420,8 +432,7 @@ async def handle_registration_input(update: Update, context: ContextTypes.DEFAUL
         try:
             await add_user_to_role(role_key, candidate, id_ml)
             await update.message.reply_text(
-                f"✅ Пользователь @{candidate.username} добавлен в *{ROLE_NAMES[role_key]}* с ID {id_ml}!",
-                parse_mode=ParseMode.MARKDOWN
+                f"✅ Пользователь @{candidate.username} добавлен в {ROLE_NAMES[role_key]} с ID {id_ml}!"
             )
         except ValueError as e:
             await update.message.reply_text(f"❌ {e}")
@@ -431,7 +442,6 @@ async def handle_registration_input(update: Update, context: ContextTypes.DEFAUL
 
         context.user_data.clear()
 
-    
     elif state == "awaiting_username_del":
         if not text.startswith('@'):
             await update.message.reply_text("❌ Username должен начинаться с @. Попробуйте снова.")
@@ -439,16 +449,13 @@ async def handle_registration_input(update: Update, context: ContextTypes.DEFAUL
 
         user = await find_user_by_username(text)
         if not user:
-            await update.message.reply_text(
-                f"❌ Пользователь {text} не найден в базе."
-            )
+            await update.message.reply_text(f"❌ Пользователь {text} не найден в базе.")
             return
 
         try:
             await remove_user_from_role(role_key, user.user_id)
             await update.message.reply_text(
-                f"✅ Пользователь @{user.username} удалён из *{ROLE_NAMES[role_key]}*.",
-                parse_mode=ParseMode.MARKDOWN
+                f"✅ Пользователь @{user.username} удалён из {ROLE_NAMES[role_key]}."
             )
         except ValueError as e:
             await update.message.reply_text(f"❌ {e}")
@@ -459,7 +466,6 @@ async def handle_registration_input(update: Update, context: ContextTypes.DEFAUL
         context.user_data.clear()
 
 async def reg_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    
     if update.effective_chat.type != "private":
         await update.message.reply_text(
             "❌ Эта команда доступна только в личных сообщениях с ботом."
@@ -468,14 +474,10 @@ async def reg_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = update.effective_user.id
 
-    
     if not await is_user_admin(user_id):
-        await update.message.reply_text(
-            "❌ Только администраторы могут использовать команду /reg."
-        )
+        await update.message.reply_text("❌ Только администраторы могут использовать команду /reg.")
         return
 
-    
     buttons = [
         InlineKeyboardButton(name, callback_data=f"view_role:{key}")
         for key, name in ROLE_NAMES.items()
@@ -483,14 +485,9 @@ async def reg_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    
-    await update.message.reply_text(
-        "Выберите категорию:",
-        reply_markup=reply_markup
-    )
+    await update.message.reply_text("Выберите категорию:", reply_markup=reply_markup)
     
 async def teg_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     buttons = [
         InlineKeyboardButton(name, callback_data=f"teg_role:{key}")
         for key, name in ROLE_NAMES.items()
@@ -514,7 +511,6 @@ async def teg_view_role_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("В этой категории никто не зарегистрирован.")
         return
 
-    
     buttons = []
     for u in users:
         if u.username:
@@ -522,17 +518,12 @@ async def teg_view_role_handler(update: Update, context: ContextTypes.DEFAULT_TY
             callback = f"teg_user:{u.user_id}:{role_key}"
             buttons.append(InlineKeyboardButton(btn_text, callback_data=callback))
         
-    
-    
     keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
-    
-    
     keyboard.append([InlineKeyboardButton("📣 Тегнуть всех", callback_data=f"teg_all:{role_key}")])
     keyboard.append([InlineKeyboardButton("⬅ Назад", callback_data="teg_back")])
 
     await query.edit_message_text(
-        f"Выберите пользователя для тега в категории *{ROLE_NAMES[role_key]}*:",
-        parse_mode=ParseMode.MARKDOWN,
+        f"Выберите пользователя для тега в категории {ROLE_NAMES[role_key]}:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -544,16 +535,17 @@ async def teg_single_user_handler(update: Update, context: ContextTypes.DEFAULT_
     user_id = int(user_id_str)
 
     
+    role_model = ROLE_TO_MODEL[role_key]
     session = Session()
     try:
-        user = session.query(User).filter_by(user_id=user_id).first()
-        if not user or not user.username:
-            await query.message.reply_text("❌ Пользователь не найден или у него нет username.")
+        role_user = session.query(role_model).filter_by(user_id=user_id).first()
+        if not role_user or not role_user.username:
+            await query.message.reply_text("❌ Пользователь не найден в этой категории или у него нет username.")
             return
+        id_ml = role_user.id_ml or "не указан"
     finally:
         session.close()
 
-    
     group_id = context.bot_data.get("last_admin_group_id")
     if not group_id:
         await query.message.reply_text(
@@ -562,12 +554,12 @@ async def teg_single_user_handler(update: Update, context: ContextTypes.DEFAULT_
         return
 
     try:
-        
+        role_name = ROLE_NAMES.get(role_key, "неизвестная роль")
         await context.bot.send_message(
             chat_id=group_id,
-            text=f"👉 @{user.username}"
+            text=f"📢 Тег по роли «{role_name}»:\n👉 @{role_user.username} (ID ML: {id_ml})]+\n Ты нужен на землях рассвета"
         )
-        await query.message.reply_text(f"✅ @{user.username} тегнут в группу!")
+        await query.message.reply_text(f"✅ @{role_user.username} тегнут в группу с ID ML: {id_ml}!")
     except Exception as e:
         await query.message.reply_text(f"❌ Ошибка отправки: {e}")
         
@@ -578,7 +570,6 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
     role_key = query.data.split(":", 1)[1]
     users = await get_role_users(role_key)
 
-    
     users_with_username = [u for u in users if u.username]
     if not users_with_username:
         await query.message.reply_text("❌ В категории нет пользователей с username.")
@@ -591,14 +582,24 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
-    
     chunks = [users_with_username[i:i+4] for i in range(0, len(users_with_username), 4)]
 
     try:
-        for chunk in chunks:
-            mentions = " ".join(f"@{u.username}" for u in chunk)
-            await context.bot.send_message(chat_id=group_id, text=mentions)
-        await query.message.reply_text(f"✅ Всего {len(users_with_username)} пользователей тегнуто в группу!")
+        role_name = ROLE_NAMES.get(role_key, "неизвестная роль")
+
+        
+        for i, chunk in enumerate(chunks):
+            if i == 0:
+                lines = [f"📢 Тег по роли «{role_name}»:\nТы нужен на землях рассвета"]
+                for u in chunk:
+                    id_ml = u.id_ml or "не указан"
+                    lines.append(f"• @{u.username} (ID ML: {id_ml})")
+                message = "\n".join(lines)
+            else:
+                
+                message = " ".join(f"@{u.username}" for u in chunk)
+            
+            await context.bot.send_message(chat_id=group_id, text=message)
     except Exception as e:
         await query.message.reply_text(f"❌ Ошибка при теге всех: {e}")
         
@@ -639,14 +640,12 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print("🤖 Бот запущен. Добавьте меня в группу, чтобы начать!")
     
-     # Получаем токен из переменной окружения
     bot_token = os.getenv("BOT_TOKEN")
     if not bot_token:
         raise ValueError("❌ Токен бота не найден! Убедитесь, что в .env есть строка BOT_TOKEN=...")
 
     application = Application.builder().token(bot_token).build()
     application.add_error_handler(error_handler)
-    
     
     application.add_handler(ChatMemberHandler(on_chat_member_update))
     application.add_handler(CommandHandler("start", start_command))
@@ -655,22 +654,15 @@ def main():
     application.add_handler(CommandHandler("teg", teg_command))
     application.add_handler(MessageHandler(filters.ChatType.GROUPS, handle_group_message))
     
-    
-    
-    
     application.add_handler(CallbackQueryHandler(view_role_handler, pattern=r"^view_role:"))
     application.add_handler(CallbackQueryHandler(add_to_role_start, pattern=r"^add_to:"))
     application.add_handler(CallbackQueryHandler(del_from_role_start, pattern=r"^del_from:"))
     application.add_handler(CallbackQueryHandler(back_to_roles_handler, pattern=r"^back_to_roles$"))
 
-
-
-    
     application.add_handler(CallbackQueryHandler(teg_view_role_handler, pattern=r"^teg_role:"))
     application.add_handler(CallbackQueryHandler(teg_single_user_handler, pattern=r"^teg_user:"))
     application.add_handler(CallbackQueryHandler(teg_all_users_handler, pattern=r"^teg_all:"))
     application.add_handler(CallbackQueryHandler(teg_back_handler, pattern=r"^teg_back$"))
-    
     
     application.add_handler(
         MessageHandler(
