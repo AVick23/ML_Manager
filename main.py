@@ -39,7 +39,8 @@ from events import (
     crm_menu, crm_create_event_start, handle_crm_input, 
     join_menu, handle_event_action,
     evt_select_day, evt_select_hour, evt_select_minute, 
-    evt_back_day, evt_back_hour, evt_cancel # <--- Новые
+    evt_back_day, evt_back_hour, evt_cancel,
+    evt_view_participants, evt_delete_event, back_to_crm_menu
 )
 from scheduler import start_scheduler
 
@@ -66,7 +67,7 @@ async def dispatch_private_text(update: Update, context: ContextTypes.DEFAULT_TY
         await handle_registration_input(update, context)
     # Если ни одно состояние не совпадает - игнорируем сообщение
 
-# --- Групповые события ---
+# --- ГРУППОВЫЕ СОБЫТИЯ ---
 
 async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.chat_member: return
@@ -104,14 +105,14 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if user.id in ADMIN_IDS:
         context.bot_data["last_admin_group_id"] = chat.id
 
-# --- Обработка ошибок ---
+# --- ОБРАБОТКА ОШИБОК ---
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     if context.error is None: return
     if "NoneType" in str(context.error) and "new_chat_member" in str(context.error): return
     print(f"❌ Ошибка: {context.error}")
 
-# --- Main ---
+# --- MAIN ---
 
 def main():
     print("🤖 Бот запущен!")
@@ -130,14 +131,15 @@ def main():
     # 2. Команды
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("me", profile_command))
-    application.add_handler(CommandHandler("join", join_menu))
+    application.add_handler(CommandHandler("join", join_menu)) # НОВАЯ КОМАНДА: Запись на игру
     
     # 3. Главное меню (Dashboard Callbacks)
+    # Убедитесь, что в state.py добавлено: CD_MENU_CRM = "menu_crm"
     application.add_handler(CallbackQueryHandler(show_all_players, pattern=f"^{state.CD_MENU_PLAYERS}"))
     application.add_handler(CallbackQueryHandler(reg_menu, pattern=f"^{state.CD_MENU_REG}$"))
     application.add_handler(CallbackQueryHandler(tag_menu, pattern=f"^{state.CD_MENU_TAG}$"))
-    application.add_handler(CallbackQueryHandler(crm_menu, pattern=f"^{state.CD_MENU_CRM}$"))
-    application.add_handler(CallbackQueryHandler(tournament_menu, pattern=f"^{state.CD_MENU_TOURNAMENT}$"))
+    application.add_handler(CallbackQueryHandler(crm_menu, pattern=f"^{state.CD_MENU_CRM}$")) # НОВОЕ МЕНЮ CRM
+    application.add_handler(CallbackQueryHandler(tournament_menu, pattern=f"^{state.CD_MENU_TOURNAMENT}$")) # МИКС
     application.add_handler(CallbackQueryHandler(settings_menu, pattern=f"^{state.CD_MENU_SETTINGS}$"))
     application.add_handler(CallbackQueryHandler(back_to_menu_handler, pattern=f"^{state.CD_BACK_TO_MENU}$"))
     
@@ -164,7 +166,8 @@ def main():
     
     # 6. CRM (Игры и Планирование)
     application.add_handler(CallbackQueryHandler(crm_create_event_start, pattern="^crm_create_event$"))
-    # НОВЫЕ ХЕНДЛЕРЫ ДЛЯ КАЛЕНДАРЯ
+    
+    # КАЛЕНДАРЬ
     application.add_handler(CallbackQueryHandler(evt_select_day, pattern=r"^evt_day:"))
     application.add_handler(CallbackQueryHandler(evt_select_hour, pattern=r"^evt_hour:"))
     application.add_handler(CallbackQueryHandler(evt_select_minute, pattern=r"^evt_min:"))
@@ -172,10 +175,16 @@ def main():
     application.add_handler(CallbackQueryHandler(evt_back_hour, pattern="^evt_back_hour$"))
     application.add_handler(CallbackQueryHandler(evt_cancel, pattern="^cancel_event$"))
     
+    # ПРОСМОТР СОСТАВА И УДАЛЕНИЕ
+    application.add_handler(CallbackQueryHandler(evt_view_participants, pattern=r"^evt_view:"))
+    application.add_handler(CallbackQueryHandler(evt_delete_event, pattern=r"^evt_del:"))
+    application.add_handler(CallbackQueryHandler(back_to_crm_menu, pattern="^back_to_crm_menu$"))
+
+    # ЗАПИСЬ ИГРОКОВ
     application.add_handler(CallbackQueryHandler(handle_event_action, pattern=r"^event_(join|leave):"))
     
     # 7. Микс (Турнир)
-    # ConversationHandler должен стоять ДО обычных текстовых хендлеров, чтобы перехватывать сообщения в процессе диалога
+    # ВАЖНО: ConversationHandler должен стоять ДО обычных MessageHandler с текстом!
     application.add_handler(mix_conv_handler)
     
     # 8. Настройки (Settings Callbacks)
@@ -184,7 +193,7 @@ def main():
     
     # 9. Текстовый ввод (Unified Handler)
     # УБРАЛ СТАРЫЕ ТРИ MessageHandler'а
-    # ДОБАВЛЕН ОДИН ЕДИНЫЙ ДИСПЕТЧЕР
+    # ДОБАВИЛ ОДИН ЕДИНЫЙ ДИСПЕТЧЕР
     application.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
@@ -192,7 +201,7 @@ def main():
         )
     )
     
-    # ЗАПУСК ПЛАНИРОВЩИКА
+    # ЗАПУСК ПЛАНИРОВЩИКА (Отправка уведомлений о матчах)
     start_scheduler(application)
     
     application.run_polling()

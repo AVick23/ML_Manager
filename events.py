@@ -7,10 +7,7 @@ from db import (
 )
 import state
 
-# Формат даты для хранения в БД (UTC)
-# Мы будем конвертировать МСК время в UTC перед сохранением,
-# но для шедулера нам нужно сравнивать строки корректно.
-# Проще всего хранить уже смещенное время.
+# Формат даты для хранения в БД
 DATE_FORMAT = "%Y-%m-%d %H:%M"
 
 # Часовой пояс Москвы (UTC+3)
@@ -43,6 +40,10 @@ async def crm_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not events:
         text += "Активных игр нет."
+        keyboard = [
+            [InlineKeyboardButton("➕ Создать игру", callback_data="crm_create_event")],
+            [InlineKeyboardButton("⬅ Назад в меню", callback_data=state.CD_BACK_TO_MENU)]
+        ]
     else:
         for ev in events:
             count = session.query(EventParticipant).filter_by(event_id=ev.id).count()
@@ -50,11 +51,16 @@ async def crm_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"📆 {safe_title}\n"
             text += f"🕒 {ev.event_time} (МСК)\n"
             text += f"👥 Участников: {count}\n\n"
-
-    keyboard = [
-        [InlineKeyboardButton("➕ Создать игру", callback_data="crm_create_event")],
-        [InlineKeyboardButton("⬅ Назад в меню", callback_data=state.CD_BACK_TO_MENU)]
-    ]
+        
+        # Генерируем клавиатуру с кнопками для каждой игры
+        keyboard = []
+        for ev in events:
+            btn_view = InlineKeyboardButton("👥 Состав", callback_data=f"evt_view:{ev.id}")
+            btn_del = InlineKeyboardButton("🗑 Удалить", callback_data=f"evt_del:{ev.id}")
+            keyboard.append([btn_view, btn_del])
+        
+        keyboard.append([InlineKeyboardButton("➕ Создать игру", callback_data="crm_create_event")])
+        keyboard.append([InlineKeyboardButton("⬅ Назад в меню", callback_data=state.CD_BACK_TO_MENU)])
     
     if query:
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
@@ -68,13 +74,94 @@ async def crm_create_event_start(update: Update, context: ContextTypes.DEFAULT_T
     
     context.user_data["crm_state"] = "awaiting_title"
     
-    text = "➕ **Создание новой игры**\n\n"
-    text += "1. Введите название игры (например: Турнир против Team Alpha)."
+    text = (
+        "➕ **Создание новой игры**\n\n"
+        "1. Введите название игры (например: Турнир против Team Alpha)."
+    )
     
     if query:
         await query.edit_message_text(text)
     else:
         await update.message.reply_text(text)
+
+# --- ФУНКЦИЯ ПРОСМОТРА СОСТАВА (НОВАЯ) ---
+
+async def evt_view_participants(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ Показывает, кто записан на конкретную игру """
+    query = update.callback_query
+    await query.answer()
+    
+    # Парсинг ID
+    event_id_str = query.data.split(":")[1]
+    event_id = int(event_id_str)
+    
+    session = Session()
+    try:
+        event = session.query(Event).get(event_id)
+        if not event:
+            return await query.message.reply_text("Игра не найдена.")
+        
+        participants = session.query(EventParticipant).filter_by(event_id=event_id).all()
+        users = session.query(User).filter(User.user_id.in_([p.user_id for p in participants])).all()
+        
+        text = f"📋 **Состав игры:** {escape_markdown(event.title)}\n\n"
+        
+        if not users:
+            text += "Пока никто не записался."
+        else:
+            for u in users:
+                name = f"{u.first_name} (@{u.username})" if u.username else u.first_name
+                text += f"• {name}\n"
+        
+        # Кнопка возврата
+        keyboard = [[InlineKeyboardButton("⬅ Назад", callback_data="back_to_crm_menu")]]
+        
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        
+    finally:
+        session.close()
+
+# --- ФУНКЦИЯ УДАЛЕНИЯ ИГРЫ (НОВАЯ) ---
+
+async def evt_delete_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ Удаляет игру и всех участников """
+    query = update.callback_query
+    await query.answer()
+    
+    # Парсинг ID
+    event_id_str = query.data.split(":")[1]
+    event_id = int(event_id_str)
+    
+    session = Session()
+    try:
+        event = session.query(Event).get(event_id)
+        if not event:
+            return await query.message.reply_text("Игра не найдена.")
+        
+        # Сначала удаляем участников (чтобы не оставалось мусора в БД)
+        session.query(EventParticipant).filter_by(event_id=event_id).delete()
+        
+        # Потом удаляем саму игру
+        session.delete(event)
+        session.commit()
+        
+        await query.message.reply_text(f"✅ Игра {escape_markdown(event.title)} удалена.")
+        # Обновляем меню
+        return await crm_menu(update, context)
+        
+    except Exception as e:
+        session.rollback()
+        await query.message.reply_text(f"❌ Ошибка при удалении: {e}")
+    finally:
+        session.close()
+
+async def back_to_crm_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ Возврат в CRM меню из просмотра состава """
+    query = update.callback_query
+    if query: await query.answer()
+    return await crm_menu(update, context)
+
+# --- СОЗДАНИЕ ИГРЫ (Календарь) ---
 
 async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ Шаг 2: Выбор даты (Сегодня + 7 дней) """
@@ -83,11 +170,10 @@ async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     title = context.user_data.get('event_title', 'Неизвестно')
     text = f"✅ Название: {title}\n\n"
-    text += "2. Выберите дату игры (по МСК):"
+    text += "2. Выберите дату игры:"
     
     keyboard = []
-    now = datetime.now(MSK_TZ) # Берем время по МСК
-    # Генерируем кнопки на ближайшие 7 дней
+    now = datetime.now(MSK_TZ)
     for i in range(0, 8):
         event_date = now + timedelta(days=i)
         day_name = event_date.strftime("%d %b (%a)")
@@ -106,7 +192,7 @@ async def ask_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query: await query.answer()
 
-    text = "3. Выберите час (по МСК):"
+    text += "3. Выберите час:"
     keyboard = []
     
     row = []
@@ -129,7 +215,7 @@ async def ask_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query: await query.answer()
     
     selected_hour = context.user_data.get("crm_hour", "00")
-    text = f"3. Выбранное время (МСК): {selected_hour}:XX\n\n"
+    text += f"3. Выбранное время: {selected_hour}:XX\n\n"
     text += "4. Выберите минуты:"
     
     keyboard = [
@@ -145,7 +231,7 @@ async def ask_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query:
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-# --- ХЕНДЛЕРЫ ВВОДА ---
+# --- ХЕНДЛЕРЫ ВВОДА И ВЫБОРА ---
 
 async def handle_crm_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ Обработка ввода названия """
@@ -160,11 +246,10 @@ async def handle_crm_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text("❌ Название не может быть пустым.")
         
         context.user_data["event_title"] = title
-        context.user_data["crm_state"] = "awaiting_date" # Переходим к выбору даты
+        context.user_data["crm_state"] = "awaiting_date"
         return await ask_date(update, context)
 
 async def evt_select_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Обработка нажатия на дату """
     query = update.callback_query
     await query.answer()
     
@@ -177,14 +262,12 @@ async def evt_select_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await ask_hour(update, context)
 
 async def evt_back_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Возврат к выбору даты """
     query = update.callback_query
     await query.answer()
     context.user_data["crm_state"] = "awaiting_date"
     return await ask_date(update, context)
 
 async def evt_select_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Обработка нажатия на час """
     query = update.callback_query
     await query.answer()
     
@@ -197,21 +280,19 @@ async def evt_select_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await ask_minute(update, context)
 
 async def evt_back_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Возврат к выбору часа """
     query = update.callback_query
     await query.answer()
     context.user_data["crm_state"] = "awaiting_hour"
     return await ask_hour(update, context)
 
 async def evt_select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Обработка нажатия на минуту и СОЗДАНИЕ ИГРЫ """
+    """ Создание игры """
     query = update.callback_query
     await query.answer()
     
     _, minute_str = query.data.split(":")
     minute = int(minute_str)
     
-    # Считываем данные из контекста
     offset = context.user_data.get("crm_day_offset", 0)
     hour = context.user_data.get("crm_hour", 0)
     title = context.user_data.get("event_title")
@@ -219,12 +300,12 @@ async def evt_select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not title:
         return await query.message.reply_text("❌ Ошибка: Название утеряно. Начните заново.")
     
-    # Формируем дату и время по МОСКОВСКОМУ ВРЕМЕНИ
+    # Формируем дату и время по МСК
     now_msk = datetime.now(MSK_TZ)
     target_date_msk = now_msk + timedelta(days=offset)
     target_date_msk = target_date_msk.replace(hour=hour, minute=minute, second=0, microsecond=0)
     
-    # Сохраняем в БД (хранить будем строку МСК времени для удобства сравнения)
+    # Сохраняем в БД
     event_time_str = target_date_msk.strftime(DATE_FORMAT)
     
     session = Session()
@@ -236,7 +317,6 @@ async def evt_select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
     
-    # Очищаем контекст
     context.user_data.clear()
     
     msg = (
@@ -245,18 +325,16 @@ async def evt_select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Время: {event_time_str} (МСК)"
     )
     await query.message.reply_text(msg)
-    # Возвращаемся в меню CRM
     return await crm_menu(update, context)
 
 async def evt_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Отмена создания """
     query = update.callback_query
     await query.answer()
     context.user_data.clear()
     await query.edit_message_text("❌ Отмена.")
     return await crm_menu(update, context)
 
-# --- ИГРОКОВАЯ ЧАСТЬ (Запись / Отписка) ---
+# --- ИГРОКОВАЯ ЧАСТЬ ---
 
 async def join_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ Команда для игрока: записаться на игру """
@@ -337,7 +415,6 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
     """ Функция запускается раз в минуту шедулером """
     session = Session()
     try:
-        # Сравниваем со строкой времени МСК
         now_str = datetime.now(MSK_TZ).strftime(DATE_FORMAT)
         
         events = session.query(Event).filter(
@@ -363,7 +440,10 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
                 )
                 group_id = context.bot_data.get("last_admin_group_id")
                 if group_id:
-                    await context.bot.send_message(chat_id=group_id, text=message, parse_mode='Markdown')
+                    try:
+                        await context.bot.send_message(chat_id=group_id, text=message, parse_mode='Markdown')
+                    except Exception as e:
+                        print(f"Не могу отправить в чат {group_id}: {e}")
             
             ev.status = 'Done'
             session.commit()
