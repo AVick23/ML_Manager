@@ -33,6 +33,27 @@ class RegistrationBase(Base):
     username = Column(String)
     id_ml = Column(Integer)  
     
+class Event(Base):
+    __tablename__ = 'events'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String, nullable=False) # Название игры (Например: Турнир, Скрим)
+    event_time = Column(String, nullable=False) # Время в формате 'YYYY-MM-DD HH:MM'
+    status = Column(String, default='Scheduled') # Scheduled, Done, Cancelled
+    
+    def __repr__(self):
+        return f"<Event(id={self.id}, title='{self.title}', time='{self.event_time}')>"
+
+class EventParticipant(Base):
+    __tablename__ = 'event_participants'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_id = Column(Integer, nullable=False)
+    user_id = Column(Integer, nullable=False)
+    status = Column(String, default='Active') # Active, Checked-in (для чек-ина)
+    
+    __table_args__ = (UniqueConstraint('event_id', 'user_id', name='uq_event_user'),)
+    
 class Middle(RegistrationBase):
     __tablename__ = 'middle'
 

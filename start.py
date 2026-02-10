@@ -13,21 +13,27 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = update.effective_user
 
-    # Если это админ, а его нет в БД (или данные устарели) — сохраняем/обновляем.
-    # Это решает проблему "админов нет в списке", если они не писали в группу.
-    if user_id in ADMIN_IDS:
-        await save_user(
-            user_id=user.id,
-            first_name=user.first_name,
-            last_name=user.last_name,
-            username=user.username
-        )
+    # 1. Всегда сохраняем/обновляем пользователя в БД при старте.
+    # Это нужно, чтобы бот работал корректно для всех, даже если они только пришли в ЛС.
+    await save_user(
+        user_id=user.id,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        username=user.username
+    )
     
     await show_main_menu(update, context)
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id if update.effective_user else (update.callback_query.from_user.id if query else None)
+    
+    # Определяем ID пользователя (если это callback или новое сообщение)
+    if update.effective_user:
+        user_id = update.effective_user.id
+    elif query:
+        user_id = query.from_user.id
+    else:
+        return
     
     is_admin = await is_user_admin(user_id)
     
@@ -47,6 +53,10 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("📝 Регистрация ролей", callback_data=state.CD_MENU_REG)
             ],
             [
+                InlineKeyboardButton("📅 Игры (CRM)", callback_data=state.CD_MENU_CRM),
+                InlineKeyboardButton("🎲 Микс (Рандом)", callback_data=state.CD_MENU_TOURNAMENT)
+            ],
+            [
                 InlineKeyboardButton("📢 Тегнуть игроков", callback_data=state.CD_MENU_TAG),
                 InlineKeyboardButton("⚙️ Настройки", callback_data=state.CD_MENU_SETTINGS)
             ]
@@ -58,8 +68,11 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Вы можете использовать бота для вызова игроков на матчи по ролям."
         )
         
-        # Обычному игроку даем только доступ к тегам
         keyboard = [
+            [
+                InlineKeyboardButton("📅 Игры (CRM)", callback_data=state.CD_MENU_CRM),
+                InlineKeyboardButton("🎲 Микс (Рандом)", callback_data=state.CD_MENU_TOURNAMENT)
+            ],
             [
                 InlineKeyboardButton("📢 Тегнуть игроков", callback_data=state.CD_MENU_TAG)
             ]
@@ -73,9 +86,11 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
     except Exception as e:
-        pass # Игнорируем ошибки редактирования, если ничего не изменилось
+        # Игнорируем ошибку, если текст не изменился
+        pass
 
 async def back_to_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    if query:
+        await query.answer()
     await show_main_menu(update, context)
