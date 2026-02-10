@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from db import (
@@ -7,8 +7,14 @@ from db import (
 )
 import state
 
-# Формат даты для хранения в БД
+# Формат даты для хранения в БД (UTC)
+# Мы будем конвертировать МСК время в UTC перед сохранением,
+# но для шедулера нам нужно сравнивать строки корректно.
+# Проще всего хранить уже смещенное время.
 DATE_FORMAT = "%Y-%m-%d %H:%M"
+
+# Часовой пояс Москвы (UTC+3)
+MSK_TZ = timezone(timedelta(hours=3))
 
 def escape_markdown(text):
     """ Экранирует спецсимволы Markdown """
@@ -42,7 +48,7 @@ async def crm_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             count = session.query(EventParticipant).filter_by(event_id=ev.id).count()
             safe_title = escape_markdown(ev.title)
             text += f"📆 {safe_title}\n"
-            text += f"🕒 {ev.event_time}\n"
+            text += f"🕒 {ev.event_time} (МСК)\n"
             text += f"👥 Участников: {count}\n\n"
 
     keyboard = [
@@ -72,26 +78,22 @@ async def crm_create_event_start(update: Update, context: ContextTypes.DEFAULT_T
 
 async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ Шаг 2: Выбор даты (Сегодня + 7 дней) """
-    # Проверка: вызов может прийти из текста или колбэка
     query = update.callback_query
     if query: await query.answer()
 
     title = context.user_data.get('event_title', 'Неизвестно')
     text = f"✅ Название: {title}\n\n"
-    text += "2. Выберите дату игры:"
+    text += "2. Выберите дату игры (по МСК):"
     
     keyboard = []
-    now = datetime.now()
+    now = datetime.now(MSK_TZ) # Берем время по МСК
     # Генерируем кнопки на ближайшие 7 дней
     for i in range(0, 8):
         event_date = now + timedelta(days=i)
-        # Формат кнопки: "Сегодня (Пт)", "Завтра (Сб)"
         day_name = event_date.strftime("%d %b (%a)")
-        # Callback: evt_day:0 (смещение в днях)
         btn = InlineKeyboardButton(day_name, callback_data=f"evt_day:{i}")
         keyboard.append([btn])
 
-    # Кнопка отмены
     keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_event")])
 
     if query:
@@ -104,13 +106,9 @@ async def ask_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query: await query.answer()
 
-    title = context.user_data.get('event_title', 'Неизвестно')
-    text = f"✅ Название: {title}\n\n"
-    text += "3. Выберите час:"
-    
+    text = "3. Выберите час (по МСК):"
     keyboard = []
     
-    # Сетка часов 4 в ряд
     row = []
     for i in range(0, 24):
         hour_str = f"{i:02d}"
@@ -130,11 +128,8 @@ async def ask_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query: await query.answer()
     
-    title = context.user_data.get('event_title', 'Неизвестно')
     selected_hour = context.user_data.get("crm_hour", "00")
-    
-    text = f"✅ Название: {title}\n"
-    text += f"🕒 Выбранное время: {selected_hour}:XX\n\n"
+    text = f"3. Выбранное время (МСК): {selected_hour}:XX\n\n"
     text += "4. Выберите минуты:"
     
     keyboard = [
@@ -166,7 +161,6 @@ async def handle_crm_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         context.user_data["event_title"] = title
         context.user_data["crm_state"] = "awaiting_date" # Переходим к выбору даты
-        # Вызываем функцию с кнопками даты
         return await ask_date(update, context)
 
 async def evt_select_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -225,14 +219,16 @@ async def evt_select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not title:
         return await query.message.reply_text("❌ Ошибка: Название утеряно. Начните заново.")
     
-    # Формируем дату и время
-    target_date = datetime.now() + timedelta(days=offset)
-    target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    # Формируем дату и время по МОСКОВСКОМУ ВРЕМЕНИ
+    now_msk = datetime.now(MSK_TZ)
+    target_date_msk = now_msk + timedelta(days=offset)
+    target_date_msk = target_date_msk.replace(hour=hour, minute=minute, second=0, microsecond=0)
     
-    # Сохраняем в БД
+    # Сохраняем в БД (хранить будем строку МСК времени для удобства сравнения)
+    event_time_str = target_date_msk.strftime(DATE_FORMAT)
+    
     session = Session()
     try:
-        event_time_str = target_date.strftime(DATE_FORMAT)
         new_event = Event(title=title, event_time=event_time_str)
         session.add(new_event)
         session.commit()
@@ -246,7 +242,7 @@ async def evt_select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         f"✅ Игра создана!\n"
         f"Название: {title}\n"
-        f"Время: {event_time_str}"
+        f"Время: {event_time_str} (МСК)"
     )
     await query.message.reply_text(msg)
     # Возвращаемся в меню CRM
@@ -341,7 +337,8 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
     """ Функция запускается раз в минуту шедулером """
     session = Session()
     try:
-        now_str = datetime.now().strftime(DATE_FORMAT)
+        # Сравниваем со строкой времени МСК
+        now_str = datetime.now(MSK_TZ).strftime(DATE_FORMAT)
         
         events = session.query(Event).filter(
             Event.event_time == now_str,
