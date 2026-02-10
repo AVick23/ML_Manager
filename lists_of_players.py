@@ -2,6 +2,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from db import get_all_users, is_user_admin, ADMIN_IDS, Session, ROLE_TO_MODEL, ROLE_NAMES
 import state
+import asyncio
 
 ITEMS_PER_PAGE = 10
 
@@ -21,7 +22,7 @@ async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("В базе данных пока нет пользователей.")
         return
 
-    # 1. Определяем страницу
+    # Определяем текущую страницу
     page = 1
     if query.data and ":" in query.data:
         try:
@@ -33,23 +34,26 @@ async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_count = sum(1 for user in users if user.user_id in ADMIN_IDS)
     total_pages = (total_users + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
     
-    # 2. Вырезаем пользователей для текущей страницы
     start_index = (page - 1) * ITEMS_PER_PAGE
     end_index = start_index + ITEMS_PER_PAGE
     page_users = users[start_index:end_index]
 
-    # 3. Собираем ID пользователей на этой странице, чтобы проверить их роли
-    page_user_ids = [u.user_id for u in page_users]
-
-    # 4. Функция для получения ролей (синхронная, чтобы быстро дернуть БД)
+    message = (
+        f"👥 **Список всех пользователей** (всего: {total_users}, админов: {admin_count})\n"
+        f"📄 Страница {page}/{total_pages}\n\n"
+    )
+    
+    # --- ЛОГИКА ПРОВЕРКИ РОЛЕЙ (Исправлена) ---
+    
+    # Функция для синхронного получения ролей
     def get_roles_for_page_sync():
         session = Session()
         try:
-            user_roles = {} # Словарь: {user_id: [RoleName1, RoleName2]}
+            user_roles = {} # {user_id: [RoleName1, RoleName2]}
             
             for role_key, Model in ROLE_TO_MODEL.items():
                 # Ищем записи в таблице роли, где user_id есть в списке текущей страницы
-                role_entries = session.query(Model).filter(Model.user_id.in_(page_user_ids)).all()
+                role_entries = session.query(Model).filter(Model.user_id.in_([u.user_id for u in page_users])).all()
                 
                 for entry in role_entries:
                     uid = entry.user_id
@@ -64,26 +68,18 @@ async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finally:
             session.close()
 
-    import asyncio
+    # Запускаем в отдельном потоке
     user_roles_map = await asyncio.to_thread(get_roles_for_page_sync)
 
-    # 5. Формируем сообщение
-    message = (
-        f"👥 **Список всех пользователей** (всего: {total_users}, админов: {admin_count})\n"
-        f"📄 Страница {page}/{total_pages}\n\n"
-    )
-    
+    # Формируем сообщение
     for user in page_users:
         full_name = f"{user.first_name} {user.last_name or ''}".strip() or "Не указано имя"
         username = f"@{user.username}" if user.username else "нет username"
-        
-        # Проверяем статус админа
         admin_status = "✅ Админ" if user.user_id in ADMIN_IDS else "❌ Игрок"
         
         # Проверяем роли
         roles = user_roles_map.get(user.user_id, [])
         if roles:
-            # Объединяем роли в строку
             role_display = ", ".join(roles)
             role_text = f"🟢 [{role_display}]"
         else:
@@ -92,7 +88,7 @@ async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += f"• `{user.user_id}` | {full_name} ({username})\n"
         message += f"  {admin_status} | {role_text}\n\n"
     
-    # 6. Клавиатура
+    # Клавиатура навигации
     keyboard = []
     nav_buttons = []
     
