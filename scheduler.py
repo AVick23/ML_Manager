@@ -1,3 +1,5 @@
+# scheduler.py
+
 import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -19,16 +21,13 @@ async def run_and_start_scheduler(application):
     
     if scheduler.state:
         scheduler.start()
-        print("📅 Planner is running.")
+        print("📅 Планировщик запущен и работает.")
     else:
-        print("📅 Planner already started.")
+        print("📅 Планировщик уже был запущен.")
 
 def start_scheduler(application):
     """
-    Запускает планировщик в фоне.
+    Запускает планировщика в фоне.
     """
-    # Получаем текущий цикл (он уже создан ботом к этому моменту)
-    loop = asyncio.get_running_loop()
-    
-    # Запускаем асинхронную функцию через ensure_future
+    # Используем ensure_future для совместимости с Python 3.10
     asyncio.ensure_future(run_and_start_scheduler(application))

@@ -40,8 +40,9 @@ from events import (
     evt_back_day, evt_back_hour, evt_cancel,
     evt_view_participants, evt_delete_event, back_to_crm_menu
 )
-# Импортируем ТОЛЬКО функцию старта планировщика, сам класс scheduler уже внутри
 from scheduler import start_scheduler
+
+# ИМПОРТ ДЛЯ ТУРНИРА / МИКСА
 from tournament import tournament_menu, mix_conv_handler
 
 load_dotenv()
@@ -52,6 +53,10 @@ async def dispatch_private_text(update: Update, context: ContextTypes.DEFAULT_TY
     u_state = context.user_data
     
     # Приоритет проверки состояний:
+    # 1. CRM (Создание игры)
+    # 2. Настройки (Удаление игрока)
+    # 3. Регистрация (Ввод ID роли)
+    
     if "crm_state" in u_state and u_state["crm_state"]:
         await handle_crm_input(update, context)
     elif "settings_state" in u_state and u_state["settings_state"]:
@@ -158,6 +163,8 @@ def main():
     
     # 6. CRM (Игры и Планирование)
     application.add_handler(CallbackQueryHandler(crm_create_event_start, pattern="^crm_create_event$"))
+    
+    # КАЛЕНДАРЬ
     application.add_handler(CallbackQueryHandler(evt_select_day, pattern=r"^evt_day:"))
     application.add_handler(CallbackQueryHandler(evt_select_hour, pattern=r"^evt_hour:"))
     application.add_handler(CallbackQueryHandler(evt_select_minute, pattern=r"^evt_min:"))
@@ -182,6 +189,8 @@ def main():
     application.add_handler(CallbackQueryHandler(settings_info, pattern="^settings_info$"))
     
     # 9. Текстовый ввод (Unified Handler)
+    # УБРАЛ СТАРЫЕ ТРИ MessageHandler'а
+    # ДОБАВИЛ ОДИН ЕДИНЫЙ ДИСПЕТЧЕР
     application.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
@@ -189,10 +198,11 @@ def main():
         )
     )
     
-    # ЗАПУСК ПЛАНИРОВЩИКА
+    # ЗАПУСК ПЛАНИРОВЩИКА (Отправка уведомлений о матчах)
     start_scheduler(application)
     
-    application.run_polling()
+    # ВОССТАНОВЛЯЕМ ФУНКЦИЮ run_polling
+    application.run_polling() # <--- ВОЗВРАЩАТЬ ЭТО
 
 if __name__ == "__main__":
     main()
