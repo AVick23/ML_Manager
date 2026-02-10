@@ -19,7 +19,7 @@ class User(Base):
     first_name = Column(String, nullable=False)
     last_name = Column(String)
     username = Column(String)
-    # Поле admin УДАЛЕНО отсюда
+    # Поле admin убрано из таблицы
     
     def __repr__(self):
         return f"<User(id={self.id}, tg_id={self.user_id}, name='{self.first_name}')>"
@@ -33,6 +33,30 @@ class RegistrationBase(Base):
     username = Column(String)
     id_ml = Column(Integer)  
     
+# --- РОЛИ ---
+
+class Middle(RegistrationBase):
+    __tablename__ = 'middle'
+
+# ЗАМЕНЕНО: Вместо Adk теперь Exp
+class Exp(RegistrationBase):
+    __tablename__ = 'exp'
+
+class Gold(RegistrationBase):
+    __tablename__ = 'gold'
+
+class Les(RegistrationBase):
+    __tablename__ = 'les'
+
+class Roam(RegistrationBase):
+    __tablename__ = 'roam'
+
+# ИСПРАВЛЕНО: moderator (две 'r')
+class Moderator(RegistrationBase):
+    __tablename__ = 'moderator'
+
+# --- СОБЫТИЯ (CRM) ---
+
 class Event(Base):
     __tablename__ = 'events'
     
@@ -53,31 +77,15 @@ class EventParticipant(Base):
     status = Column(String, default='Active') # Active, Checked-in (для чек-ина)
     
     __table_args__ = (UniqueConstraint('event_id', 'user_id', name='uq_event_user'),)
-    
-class Middle(RegistrationBase):
-    __tablename__ = 'middle'
 
-class Gold(RegistrationBase):
-    __tablename__ = 'gold'
-
-class Les(RegistrationBase):
-    __tablename__ = 'les'
-
-class Roam(RegistrationBase):
-    __tablename__ = 'roam'
-
-class Adk(RegistrationBase):
-    __tablename__ = 'adk'
-
-class Moderator(RegistrationBase):
-    __tablename__ = 'moderator'
+# --- СЛОВАРИ РОЛЕЙ ---
 
 ROLE_NAMES = {
     "middle": "Мидл",
-    "gold": "Голда",
+    "gold": "Голда",  # Если хотите, можно переименовать в Экспериментатор
     "les": "Лес",
     "roam": "Роум",
-    "adk": "АДК",
+    "exp": "Экспа",  # ДОБАВЛЕНО
     "moderator": "Модератор",
 }
 
@@ -86,9 +94,11 @@ ROLE_TO_MODEL = {
     "gold": Gold,
     "les": Les,
     "roam": Roam,
-    "adk": Adk,
+    "exp": Exp,  # ДОБАВЛЕНО
     "moderator": Moderator,
 }
+
+# --- БАЗА ДАННЫХ ---
 
 DB_NAME = "bot_users.db"
 engine = create_engine(f'sqlite:///{DB_NAME}')
@@ -162,7 +172,7 @@ def is_user_admin_sync(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 def save_user_sync(user_id, first_name, last_name, username):
-    # УБРАЛИ параметр is_admin
+    # Параметр is_admin УБРАН
     session = Session()
     try:
         user = session.query(User).filter_by(user_id=user_id).first()
