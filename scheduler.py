@@ -7,8 +7,7 @@ scheduler = AsyncIOScheduler()
 
 async def run_and_start_scheduler(application):
     """
-    Запуска планировщика. Эта функция сама является асинхронной (async def),
-    поэтому application.add_task корректно запустит её.
+    Запуска планировщика.
     """
     print("🔄 Инициализация планировщика...")
     
@@ -20,15 +19,16 @@ async def run_and_start_scheduler(application):
     
     if scheduler.state:
         scheduler.start()
-        print("📅 Планировщик запущен и работает.")
+        print("📅 Planner is running.")
     else:
-        print("📅 Планировщик уже был запущен.")
+        print("📅 Planner already started.")
 
 def start_scheduler(application):
     """
-    Добавляем задачу планировщика в очередь бота.
+    Запускает планировщик в фоне.
     """
-    # Используем application.add_task для безопасного запуска асинхронной функции.
-    # application.run_polling перед запуском выполнит все post_init, поэтому
-    # create_task увидит живой event loop.
-    application.add_task(run_and_start_scheduler(application))
+    # Получаем текущий цикл (он уже создан ботом к этому моменту)
+    loop = asyncio.get_running_loop()
+    
+    # Запускаем асинхронную функцию через ensure_future
+    asyncio.ensure_future(run_and_start_scheduler(application))
