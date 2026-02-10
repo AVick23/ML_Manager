@@ -6,6 +6,11 @@ import asyncio
 
 ITEMS_PER_PAGE = 10
 
+def escape_html(text):
+    """Экранирует спецсимволы для HTML"""
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(f'\\{char}' if char in escape_chars else char for char in str(text))
+
 async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -39,13 +44,11 @@ async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
     page_users = users[start_index:end_index]
 
     message = (
-        f"👥 **Список всех пользователей** (всего: {total_users}, админов: {admin_count})\n"
+        f"👥 <b>Список всех пользователей</b> (всего: {total_users}, админов: {admin_count})\n"
         f"📄 Страница {page}/{total_pages}\n\n"
     )
     
-    # --- ЛОГИКА ПРОВЕРКИ РОЛЕЙ (Исправлена) ---
-    
-    # Функция для синхронного получения ролей
+    # --- ЛОГИКА ПРОВЕРКИ РОЛЕЙ ---
     def get_roles_for_page_sync():
         session = Session()
         try:
@@ -80,13 +83,14 @@ async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Проверяем роли
         roles = user_roles_map.get(user.user_id, [])
         if roles:
-            role_display = ", ".join(roles)
+            # Объединяем роли в строку через запятую
+            role_display = ", ".join([escape_html(r) for r in roles])
             role_text = f"🟢 [{role_display}]"
         else:
             role_text = "⚪ Без роли"
         
-        message += f"• `{user.user_id}` | {full_name} ({username})\n"
-        message += f"  {admin_status} | {role_text}\n\n"
+        message += f"• <code>{user.user_id}</code> | {full_name} ({username})<br>"
+        message += f"  {admin_status} | {role_text}<br>\n"
     
     # Клавиатура навигации
     keyboard = []
@@ -108,6 +112,7 @@ async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
-        await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+        await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='HTML')
     except Exception as e:
+        # Если текст слишком длинный для редактирования, отправляем новым сообщением (опционально)
         pass

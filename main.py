@@ -33,8 +33,6 @@ from tag_players import (
     tag_menu, teg_view_role_handler, teg_single_user_handler, 
     teg_all_users_handler, teg_back_handler
 )
-
-# НОВЫЕ ИМПОРТЫ ДЛЯ CRM (Система планирования игр)
 from events import (
     crm_menu, crm_create_event_start, handle_crm_input, 
     join_menu, handle_event_action,
@@ -42,9 +40,8 @@ from events import (
     evt_back_day, evt_back_hour, evt_cancel,
     evt_view_participants, evt_delete_event, back_to_crm_menu
 )
+# Импортируем ТОЛЬКО функцию старта планировщика, сам класс scheduler уже внутри
 from scheduler import start_scheduler
-
-# ИМПОРТ ДЛЯ ТУРНИРА / МИКСА
 from tournament import tournament_menu, mix_conv_handler
 
 load_dotenv()
@@ -55,10 +52,6 @@ async def dispatch_private_text(update: Update, context: ContextTypes.DEFAULT_TY
     u_state = context.user_data
     
     # Приоритет проверки состояний:
-    # 1. CRM (Создание игры)
-    # 2. Настройки (Удаление игрока)
-    # 3. Регистрация (Ввод ID роли)
-    
     if "crm_state" in u_state and u_state["crm_state"]:
         await handle_crm_input(update, context)
     elif "settings_state" in u_state and u_state["settings_state"]:
@@ -131,15 +124,14 @@ def main():
     # 2. Команды
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("me", profile_command))
-    application.add_handler(CommandHandler("join", join_menu)) # НОВАЯ КОМАНДА: Запись на игру
+    application.add_handler(CommandHandler("join", join_menu))
     
     # 3. Главное меню (Dashboard Callbacks)
-    # Убедитесь, что в state.py добавлено: CD_MENU_CRM = "menu_crm"
     application.add_handler(CallbackQueryHandler(show_all_players, pattern=f"^{state.CD_MENU_PLAYERS}"))
     application.add_handler(CallbackQueryHandler(reg_menu, pattern=f"^{state.CD_MENU_REG}$"))
     application.add_handler(CallbackQueryHandler(tag_menu, pattern=f"^{state.CD_MENU_TAG}$"))
-    application.add_handler(CallbackQueryHandler(crm_menu, pattern=f"^{state.CD_MENU_CRM}$")) # НОВОЕ МЕНЮ CRM
-    application.add_handler(CallbackQueryHandler(tournament_menu, pattern=f"^{state.CD_MENU_TOURNAMENT}$")) # МИКС
+    application.add_handler(CallbackQueryHandler(crm_menu, pattern=f"^{state.CD_MENU_CRM}$"))
+    application.add_handler(CallbackQueryHandler(tournament_menu, pattern=f"^{state.CD_MENU_TOURNAMENT}$"))
     application.add_handler(CallbackQueryHandler(settings_menu, pattern=f"^{state.CD_MENU_SETTINGS}$"))
     application.add_handler(CallbackQueryHandler(back_to_menu_handler, pattern=f"^{state.CD_BACK_TO_MENU}$"))
     
@@ -166,8 +158,6 @@ def main():
     
     # 6. CRM (Игры и Планирование)
     application.add_handler(CallbackQueryHandler(crm_create_event_start, pattern="^crm_create_event$"))
-    
-    # КАЛЕНДАРЬ
     application.add_handler(CallbackQueryHandler(evt_select_day, pattern=r"^evt_day:"))
     application.add_handler(CallbackQueryHandler(evt_select_hour, pattern=r"^evt_hour:"))
     application.add_handler(CallbackQueryHandler(evt_select_minute, pattern=r"^evt_min:"))
@@ -179,7 +169,7 @@ def main():
     application.add_handler(CallbackQueryHandler(evt_view_participants, pattern=r"^evt_view:"))
     application.add_handler(CallbackQueryHandler(evt_delete_event, pattern=r"^evt_del:"))
     application.add_handler(CallbackQueryHandler(back_to_crm_menu, pattern="^back_to_crm_menu$"))
-
+    
     # ЗАПИСЬ ИГРОКОВ
     application.add_handler(CallbackQueryHandler(handle_event_action, pattern=r"^event_(join|leave):"))
     
@@ -192,8 +182,6 @@ def main():
     application.add_handler(CallbackQueryHandler(settings_info, pattern="^settings_info$"))
     
     # 9. Текстовый ввод (Unified Handler)
-    # УБРАЛ СТАРЫЕ ТРИ MessageHandler'а
-    # ДОБАВИЛ ОДИН ЕДИНЫЙ ДИСПЕТЧЕР
     application.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
@@ -201,7 +189,7 @@ def main():
         )
     )
     
-    # ЗАПУСК ПЛАНИРОВЩИКА (Отправка уведомлений о матчах)
+    # ЗАПУСК ПЛАНИРОВЩИКА
     start_scheduler(application)
     
     application.run_polling()
