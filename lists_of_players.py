@@ -3,13 +3,13 @@ from telegram.ext import ContextTypes
 from db import get_all_users, is_user_admin, ADMIN_IDS, Session, ROLE_TO_MODEL, ROLE_NAMES
 import state
 import asyncio
+import html  # Стандартная библиотека для экранирования HTML
 
 ITEMS_PER_PAGE = 10
 
 def escape_html(text):
-    """Экранирует спецсимволы для HTML"""
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return ''.join(f'\\{char}' if char in escape_chars else char for char in str(text))
+    """Экранирует спецсимволы для HTML (<, >, &)"""
+    return html.escape(str(text))
 
 async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -76,21 +76,26 @@ async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Формируем сообщение
     for user in page_users:
+        # ИСПРАВЛЕНО: заменено "или" на "or"
         full_name = f"{user.first_name} {user.last_name or ''}".strip() or "Не указано имя"
         username = f"@{user.username}" if user.username else "нет username"
         admin_status = "✅ Админ" if user.user_id in ADMIN_IDS else "❌ Игрок"
         
+        # Экранируем ВСЕ переменные
+        safe_name = escape_html(full_name)
+        safe_username = escape_html(username)
+        safe_admin_status = escape_html(admin_status)
+        
         # Проверяем роли
         roles = user_roles_map.get(user.user_id, [])
         if roles:
-            # Объединяем роли в строку через запятую
-            role_display = ", ".join([escape_html(r) for r in roles])
-            role_text = f"🟢 [{role_display}]"
+            role_text = ", ".join([escape_html(r) for r in roles])
         else:
             role_text = "⚪ Без роли"
         
-        message += f"• <code>{user.user_id}</code> | {full_name} ({username})<br>"
-        message += f"  {admin_status} | {role_text}<br>\n"
+        # Формируем строки. Используем \n для переносов вместо <br>
+        message += f"• <code>{user.user_id}</code> | {safe_name} ({safe_username})\n"
+        message += f"  {safe_admin_status} | {role_text}\n\n"
     
     # Клавиатура навигации
     keyboard = []
@@ -114,5 +119,9 @@ async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='HTML')
     except Exception as e:
-        # Если текст слишком длинный для редактирования, отправляем новым сообщением (опционально)
-        pass
+        print(f"❌ Ошибка при отправке списка игроков: {e}")
+        # Fallback на случай ошибки (например, слишком длинное сообщение)
+        try:
+            await query.edit_message_text("⚠️ Слишком длинный список или ошибка данных.", reply_markup=reply_markup)
+        except Exception:
+            pass
