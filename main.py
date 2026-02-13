@@ -53,18 +53,12 @@ async def dispatch_private_text(update: Update, context: ContextTypes.DEFAULT_TY
     """Перенаправляет текстовые сообщения в зависимости от состояния пользователя"""
     u_state = context.user_data
     
-    # Приоритет проверки состояний:
-    # 1. CRM (Создание игры)
-    # 2. Настройки (Удаление игрока)
-    # 3. Регистрация (Ввод ID роли)
-    
     if "crm_state" in u_state and u_state["crm_state"]:
         await handle_crm_input(update, context)
     elif "settings_state" in u_state and u_state["settings_state"]:
         await handle_global_delete_input(update, context)
     elif "reg_state" in u_state and u_state["reg_state"]:
         await handle_registration_input(update, context)
-    # Если ни одно состояние не совпадает - игнорируем сообщение
 
 # --- ГРУППОВЫЕ СОБЫТИЯ ---
 
@@ -90,7 +84,7 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Сохраняет данные пользователя и запоминает ID группы.
-    Доступно ВСЕМ пользователям.
+    Запускается для ВСЕХ сообщений в группе.
     """
     if update.effective_chat.type not in ["group", "supergroup"]:
         return
@@ -98,7 +92,6 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
     chat = update.effective_chat
 
-    # Сохраняем/обновляем пользователя в базе
     await db.save_user(
         user_id=user.id,
         first_name=user.first_name,
@@ -106,7 +99,6 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         username=user.username
     )
     
-    # Запоминаем ID группы, чтобы работала функция "Тегнуть всех"
     context.bot_data["last_admin_group_id"] = chat.id
 
 
@@ -128,39 +120,43 @@ def main():
     application.add_error_handler(error_handler)
     
     # ==========================================
-    # 1. Системные и групповые хендлеры
+    # 1. Системные хендлеры
+    # ==========================================
+    application.add_handler(ChatMemberHandler(on_chat_member_update))
+
+    # ==========================================
+    # 2. Команды (Группа 0 - Высокий приоритет)
+    # ==========================================
+    # Команды добавляем ПЕРВЫМИ в группу 0.
+    # Они перехватят /me, /start и т.д. раньше, чем универсальный сборщик статистики.
+    
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("me", profile_command)) 
+    application.add_handler(CommandHandler("join", join_menu))
+
+    # ==========================================
+    # 3. Групповые хендлеры (Распределение по группам)
     # ==========================================
     
-    application.add_handler(ChatMemberHandler(on_chat_member_update))
-    
-    # ГРУППЫ ХЕНДЛЕРОВ (GROUPS):
-    # Используем группы, чтобы несколько хендлеров могли работать одновременно в группе.
-    # Группа 0 (по умолчанию): Сохранение статистики (handle_group_message)
-    # Группа 1: Реакция на "Кто" (who_is_handler)
-    
-    # Группа 0: Сохраняет юзера и ID группы для тегов. Всегда работает.
-    application.add_handler(
-        MessageHandler(filters.ChatType.GROUPS, handle_group_message), 
-        group=0
-    )
-    
-    # Группа 1: Проверяет, не написал ли кто-то "Кто" в ответ. 
-    # Если условие не выполнено, просто пропускает сообщение.
+    # ГРУППА 1: Реакция на "Кто"
+    # Если сообщение подходит под условие (ответ + текст "кто"), выполняется здесь.
     application.add_handler(
         MessageHandler(filters.ChatType.GROUPS & filters.TEXT & filters.REPLY, who_is_handler), 
         group=1
     )
-    
+
+    # ГРУППА 2: Сбор статистики (Фоновый)
+    # Выполняется ПОСЛЕ команд (группа 0) и спец-реакций (группа 1).
+    # Сохраняет юзера в базу и запоминает ID группы для тегов.
+    # Если сообщение было командой (/me), группа 0 его уже обработала, 
+    # но PTB позволяет запустить эту функцию параллельно (т.к. группа другая).
+    application.add_handler(
+        MessageHandler(filters.ChatType.GROUPS, handle_group_message), 
+        group=2
+    )
+
     # ==========================================
-    # 2. Команды
-    # ==========================================
-    
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("me", profile_command)) # Доступна всем
-    application.add_handler(CommandHandler("join", join_menu))
-    
-    # ==========================================
-    # 3. Главное меню (Dashboard Callbacks)
+    # 4. Главное меню (Dashboard Callbacks)
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(show_all_players, pattern=f"^{state.CD_MENU_PLAYERS}"))
@@ -172,17 +168,15 @@ def main():
     application.add_handler(CallbackQueryHandler(back_to_menu_handler, pattern=f"^{state.CD_BACK_TO_MENU}$"))
     
     # ==========================================
-    # 4. Регистрация (Registration Callbacks)
+    # 5. Регистрация (Registration Callbacks)
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(view_role_handler, pattern=f"^{state.CD_VIEW_ROLE}:"))
     
-    # Добавление
     application.add_handler(CallbackQueryHandler(add_to_role_start, pattern=f"^{state.CD_ADD_TO}:"))
     application.add_handler(CallbackQueryHandler(show_users_by_letter, pattern=r"^reg_letter:"))
     application.add_handler(CallbackQueryHandler(select_user_for_action, pattern=r"^reg_select_user:"))
     
-    # Удаление
     application.add_handler(CallbackQueryHandler(del_from_role_start, pattern=f"^{state.CD_DEL_FROM}:"))
     application.add_handler(CallbackQueryHandler(delete_user_handler, pattern=r"^del_user:"))
     application.add_handler(CallbackQueryHandler(del_page_handler, pattern=r"^del_page:"))
@@ -190,7 +184,7 @@ def main():
     application.add_handler(CallbackQueryHandler(back_to_roles_handler, pattern=f"^{state.CD_BACK_TO_ROLES}$"))
     
     # ==========================================
-    # 5. Теги (Tag Callbacks)
+    # 6. Теги (Tag Callbacks)
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(teg_view_role_handler, pattern=f"^{state.CD_TEG_ROLE}:"))
@@ -199,12 +193,11 @@ def main():
     application.add_handler(CallbackQueryHandler(teg_back_handler, pattern=f"^{state.CD_TEG_BACK}$"))
     
     # ==========================================
-    # 6. CRM (Игры и Планирование)
+    # 7. CRM (Игры и Планирование)
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(crm_create_event_start, pattern="^crm_create_event$"))
     
-    # КАЛЕНДАРЬ
     application.add_handler(CallbackQueryHandler(evt_select_day, pattern=r"^evt_day:"))
     application.add_handler(CallbackQueryHandler(evt_select_hour, pattern=r"^evt_hour:"))
     application.add_handler(CallbackQueryHandler(evt_select_minute, pattern=r"^evt_min:"))
@@ -212,33 +205,29 @@ def main():
     application.add_handler(CallbackQueryHandler(evt_back_hour, pattern="^evt_back_hour$"))
     application.add_handler(CallbackQueryHandler(evt_cancel, pattern="^cancel_event$"))
     
-    # ПРОСМОТР СОСТАВА И УДАЛЕНИЕ
     application.add_handler(CallbackQueryHandler(evt_view_participants, pattern=r"^evt_view:"))
     application.add_handler(CallbackQueryHandler(evt_delete_event, pattern=r"^evt_del:"))
     application.add_handler(CallbackQueryHandler(back_to_crm_menu, pattern="^back_to_crm_menu$"))
     
-    # ЗАПИСЬ ИГРОКОВ
     application.add_handler(CallbackQueryHandler(handle_event_action, pattern=r"^event_(join|leave):"))
     
     # ==========================================
-    # 7. Микс (Турнир)
+    # 8. Микс (Турнир)
     # ==========================================
     
-    # ВАЖНО: ConversationHandler должен стоять ДО обычных MessageHandler с текстом!
     application.add_handler(mix_conv_handler)
     
     # ==========================================
-    # 8. Настройки (Settings Callbacks)
+    # 9. Настройки (Settings Callbacks)
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(settings_del_user_start, pattern="^settings_del_user$"))
     application.add_handler(CallbackQueryHandler(settings_info, pattern="^settings_info$"))
     
     # ==========================================
-    # 9. Текстовый ввод (Unified Handler)
+    # 10. Текстовый ввод (ЛС)
     # ==========================================
     
-    # Обработчик текста в ЛС (диспетчер состояний)
     application.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
@@ -250,10 +239,7 @@ def main():
     # ЗАПУСК
     # ==========================================
     
-    # ЗАПУСК ПЛАНИРОВЩИКА (Отправка уведомлений о матчах)
     start_scheduler(application)
-    
-    # ВОССТАНОВЛЯЕМ ФУНКЦИЮ run_polling
     application.run_polling()
 
 if __name__ == "__main__":
