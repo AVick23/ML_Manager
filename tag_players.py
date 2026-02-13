@@ -1,6 +1,7 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from db import get_role_users, ROLE_NAMES, Session
+# ИМПОРТИРУЕМ ROLE_MODELS (см. инструкцию ниже)
+from db import get_role_users, ROLE_NAMES, ROLE_MODELS, Session
 import state
 
 ITEMS_PER_PAGE = 10
@@ -12,7 +13,7 @@ async def tag_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     buttons = [
-        InlineKeyboardButton(name, callback_data=f"{state.CD_TEG_ROLE}:{key}:1") # Страница 1
+        InlineKeyboardButton(name, callback_data=f"{state.CD_TEG_ROLE}:{key}:1")
         for key, name in ROLE_NAMES.items()
     ]
     keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
@@ -27,7 +28,6 @@ async def teg_view_role_handler(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
 
-    # Парсим: teg_role:role_key:page
     parts = query.data.split(":")
     role_key = parts[1]
     page = int(parts[2]) if len(parts) > 2 else 1
@@ -41,14 +41,12 @@ async def teg_view_role_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("В этой категории никто не зарегистрирован.")
         return
 
-    # Пагинация
     total_pages = (len(users) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
     start_index = (page - 1) * ITEMS_PER_PAGE
     end_index = start_index + ITEMS_PER_PAGE
     page_users = users[start_index:end_index]
 
     buttons = []
-    # Генерируем кнопки игроков на текущей странице
     for u in page_users:
         if u.username:
             btn_text = f"@{u.username}"
@@ -56,15 +54,12 @@ async def teg_view_role_handler(update: Update, context: ContextTypes.DEFAULT_TY
             buttons.append(InlineKeyboardButton(btn_text, callback_data=callback))
         
     keyboard = []
-    # Кнопки игроков по 2 в ряд
     if buttons:
         keyboard += [buttons[i:i+2] for i in range(0, len(buttons), 2)]
     
-    # Кнопка "Тегнуть всех" (если есть игроки)
     if users:
         keyboard.append([InlineKeyboardButton("📣 Тегнуть всех", callback_data=f"{state.CD_TEG_ALL}:{role_key}")])
 
-    # Навигация
     nav_buttons = []
     if page > 1:
         nav_buttons.append(InlineKeyboardButton("⬅️", callback_data=f"{state.CD_TEG_ROLE}:{role_key}:{page-1}"))
@@ -98,12 +93,16 @@ async def teg_single_user_handler(update: Update, context: ContextTypes.DEFAULT_
     _, user_id_str, role_key = query.data.split(":", 2)
     user_id = int(user_id_str)
 
-    
-    role_model = ROLE_NAMES.get(role_key)
-    if not role_model: return
+    # ИСПРАВЛЕНИЕ ОШИБКИ 1: Берем класс из ROLE_MODELS, а не имя из ROLE_NAMES
+    role_model = ROLE_MODELS.get(role_key)
+    if not role_model:
+        # ИСПРАВЛЕНИЕ ОШИБКИ 2: query.message.reply_text вместо query.reply_text
+        await query.message.reply_text("❌ Ошибка конфигурации: модель роли не найдена.")
+        return
     
     session = Session()
     try:
+        # Теперь тут правильно: session.query(<Класс таблицы>)
         role_user = session.query(role_model).filter_by(user_id=user_id).first()
         if not role_user or not role_user.username:
             await query.message.reply_text("❌ Пользователь не найден или у него нет username.")
@@ -140,12 +139,14 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     users_with_username = [u for u in users if u.username]
     if not users_with_username:
-        await query.reply_text("❌ В категории нет пользователей с username.")
+        # ИСПРАВЛЕНИЕ ОШИБКИ 2: query.message.reply_text
+        await query.message.reply_text("❌ В категории нет пользователей с username.")
         return
 
     group_id = context.bot_data.get("last_admin_group_id")
     if not group_id:
-        await query.reply_text("❌ Не удалось определить группу. Напишите в группе как админ.")
+        # ИСПРАВЛЕНИЕ ОШИБКИ 2: query.message.reply_text
+        await query.message.reply_text("❌ Не удалось определить группу. Напишите в группе как админ.")
         return
 
     chunks = [users_with_username[i:i+4] for i in range(0, len(users_with_username), 4)]
@@ -153,7 +154,6 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         role_name = ROLE_NAMES.get(role_key, "неизвестная роль")
 
-        
         for i, chunk in enumerate(chunks):
             if i == 0:
                 lines = [f"📢 Тег по роли «{role_name}»:\nТы нужен на землях рассвета"]
@@ -162,10 +162,12 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
                     lines.append(f"• @{u.username} (ID ML: {id_ml})")
                 message = "\n".join(lines)
             else:
-                
                 message = " ".join(f"@{u.username}" for u in chunk)
             
             await context.bot.send_message(chat_id=group_id, text=message)
-        await query.reply_text("✅ Теги отправлены!")
+        
+        # ИСПРАВЛЕНИЕ ОШИБКИ 2: query.message.reply_text
+        await query.message.reply_text("✅ Теги отправлены!")
     except Exception as e:
-        await query.reply_text(f"❌ Ошибка при теге всех: {e}")
+        # ИСПРАВЛЕНИЕ ОШИБКИ 2: query.message.reply_text
+        await query.message.reply_text(f"❌ Ошибка при теге всех: {e}")
