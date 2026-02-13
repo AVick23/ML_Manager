@@ -32,17 +32,15 @@ LETTER_GROUPS = {
 async def _render_delete_list(update: Update, context: ContextTypes.DEFAULT_TYPE, role_key: str, page: int):
     """
     Функция отрисовки списка для удаления. 
-    Вызывается из разных мест (начало удаления, навигация, удаление юзера).
     """
     query = update.callback_query
     
     users = await get_role_users(role_key)
     
     if not users:
-        await query.edit_message_text("В этой категории пока нет игроков для удаления.")
-        # Возвращаем кнопку назад
+        # Если список пуст
         kb = [[InlineKeyboardButton("⬅ Назад", callback_data=f"{state.CD_VIEW_ROLE}:{role_key}:1")]]
-        await query.edit_message_text("Список пуст.", reply_markup=InlineKeyboardMarkup(kb))
+        await query.edit_message_text("В этой категории пока нет игроков для удаления.", reply_markup=InlineKeyboardMarkup(kb))
         return
 
     total_pages = (len(users) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
@@ -50,13 +48,14 @@ async def _render_delete_list(update: Update, context: ContextTypes.DEFAULT_TYPE
     end_index = start_index + ITEMS_PER_PAGE
     page_users = users[start_index:end_index]
 
-    text = f"🗑 **Удаление из {ROLE_NAMES[role_key]}** (всего: {len(users)})\nСтраница {page}/{total_pages}\n\n"
+    # ИСПРАВЛЕНО: Убраны звездочки (Markdown) во избежание ошибок парсинга
+    text = f"🗑 Удаление из {ROLE_NAMES[role_key]} (всего: {len(users)})\nСтраница {page}/{total_pages}\n\n"
     text += "Нажмите на игрока, чтобы удалить его из этой роли:\n\n"
 
     keyboard = []
     for u in page_users:
+        # Формируем имя. Если есть username - добавляем, иначе просто имя
         name = f"{u.first_name} (@{u.username})" if u.username else u.first_name
-        # Кнопка с именем вызывает удаление. Callback хранит user_id и текущую страницу
         callback = f"del_user:{u.user_id}:{role_key}:{page}"
         keyboard.append([InlineKeyboardButton(f"❌ {name}", callback_data=callback)])
 
@@ -75,7 +74,8 @@ async def _render_delete_list(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     keyboard.append([InlineKeyboardButton("⬅ Назад", callback_data=f"{state.CD_VIEW_ROLE}:{role_key}:1")])
 
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    # ИСПРАВЛЕНО: Убран parse_mode='Markdown'
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 # ==========================================
 # ОСНОВНЫЕ ХЕНДЛЕРЫ
@@ -116,7 +116,8 @@ async def view_role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = await get_role_users(role_key)
     
     if not users:
-        text = f"👥 **{ROLE_NAMES[role_key]}**\n\nПока никто не зарегистрирован."
+        # ИСПРАВЛЕНО: Убраны звездочки
+        text = f"👥 {ROLE_NAMES[role_key]}\n\nПока никто не зарегистрирован."
         keyboard = [
             [
                 InlineKeyboardButton("➕ Добавить", callback_data=f"{state.CD_ADD_TO}:{role_key}"),
@@ -124,7 +125,8 @@ async def view_role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
             [InlineKeyboardButton("⬅ Назад", callback_data=state.CD_BACK_TO_ROLES)]
         ]
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        # ИСПРАВЛЕНО: Убран parse_mode
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     total_pages = (len(users) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
@@ -132,13 +134,15 @@ async def view_role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     end_index = start_index + ITEMS_PER_PAGE
     page_users = users[start_index:end_index]
 
-    text = f"👥 **{ROLE_NAMES[role_key]}** (всего: {len(users)})\nСтраница {page}/{total_pages}\n\n"
+    # ИСПРАВЛЕНО: Убраны звездочки
+    text = f"👥 {ROLE_NAMES[role_key]} (всего: {len(users)})\nСтраница {page}/{total_pages}\n\n"
     
     for u in page_users:
         name = f"{u.first_name} {u.last_name or ''}".strip() or "Не указано имя"
         tag = f"@{u.username}" if u.username else "нет username"
         id_ml = u.id_ml or "не указан"
-        text += f"• {name} ({tag}) — ID: `{id_ml}`\n"
+        # ИСПРАВЛЕНО: Убраны обратные кавычки вокруг ID (они вызывали ошибку, если в имени были спецсимволы)
+        text += f"• {name} ({tag}) — ID: {id_ml}\n"
 
     keyboard = []
     keyboard.append([
@@ -153,7 +157,8 @@ async def view_role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if nav_buttons: keyboard.append(nav_buttons)
     keyboard.append([InlineKeyboardButton("⬅ Назад", callback_data=state.CD_BACK_TO_ROLES)])
     
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    # ИСПРАВЛЕНО: Убран parse_mode
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def back_to_roles_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reg_menu(update, context)
@@ -184,11 +189,11 @@ async def add_to_role_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard.append([InlineKeyboardButton("⬅ Отмена", callback_data=state.CD_VIEW_ROLE + ":" + role_key + ":1")])
 
+    # ИСПРАВЛЕНО: Убраны звездочки и parse_mode
     await query.edit_message_text(
-        f"➕ **Добавление в {ROLE_NAMES[role_key]}**\n\n"
+        f"➕ Добавление в {ROLE_NAMES[role_key]}\n\n"
         f"Выберите первую букву имени или ника игрока:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def show_users_by_letter(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -197,7 +202,6 @@ async def show_users_by_letter(update: Update, context: ContextTypes.DEFAULT_TYP
 
     group_name = query.data.split(":")[1]
     letters = LETTER_GROUPS.get(group_name, [])
-    page = 1
 
     def search_users_sync():
         session = Session()
@@ -227,7 +231,8 @@ async def show_users_by_letter(update: Update, context: ContextTypes.DEFAULT_TYP
 
     page_users = users[:ITEMS_PER_PAGE] 
 
-    text = f"🔍 Буква: **{group_name}** (найдено: {len(users)})\n\nВыберите игрока:\n"
+    # ИСПРАВЛЕНО: Убраны звездочки
+    text = f"🔍 Буква: {group_name} (найдено: {len(users)})\n\nВыберите игрока:\n"
     keyboard = []
 
     for u in page_users:
@@ -238,7 +243,8 @@ async def show_users_by_letter(update: Update, context: ContextTypes.DEFAULT_TYP
     role_key = context.user_data.get('reg_role')
     keyboard.append([InlineKeyboardButton("⬅ Выбрать другую букву", callback_data=f"{state.CD_ADD_TO}:{role_key}")])
 
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    # ИСПРАВЛЕНО: Убран parse_mode
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def select_user_for_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -261,10 +267,10 @@ async def select_user_for_action(update: Update, context: ContextTypes.DEFAULT_T
     
     name = f"{user.first_name} (@{user.username})" if user.username else user.first_name
     
+    # ИСПРАВЛЕНО: Убраны звездочки и parse_mode
     await query.edit_message_text(
         f"✅ Выбран игрок: {name}\n\n"
-        f"🔢 Введите его **игровой ID (ID ML)**:",
-        parse_mode='Markdown'
+        f"🔢 Введите его игровой ID (ID ML):"
     )
 
 # ==========================================
@@ -280,7 +286,6 @@ async def del_from_role_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     role_key = parts[1]
     page = int(parts[2]) if len(parts) > 2 else 1
 
-    # Вызываем функцию отрисовки
     await _render_delete_list(update, context, role_key, page)
 
 async def delete_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -288,7 +293,6 @@ async def delete_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
 
-    # Парсим: del_user:user_id:role_key:page
     parts = query.data.split(":")
     user_id = int(parts[1])
     role_key = parts[2]
@@ -296,11 +300,9 @@ async def delete_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     try:
         await remove_user_from_role(role_key, user_id)
-        # Успешно удалили, теперь перерисовываем список (остаемся на той же странице)
         await _render_delete_list(update, context, role_key, page)
         
     except Exception as e:
-        # Если ошибка, просто пишем в чат, список не перерисовываем, чтобы не сбить состояние
         await query.message.reply_text(f"❌ Ошибка при удалении: {e}")
 
 async def del_page_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -308,7 +310,6 @@ async def del_page_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    # Парсим: del_page:role_key:page
     parts = query.data.split(":")
     role_key = parts[1]
     page = int(parts[2])
