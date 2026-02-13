@@ -1,6 +1,5 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-# ИМПОРТИРУЕМ ROLE_MODELS (см. инструкцию ниже)
 from db import get_role_users, ROLE_NAMES, ROLE_TO_MODEL, Session
 import state
 
@@ -93,17 +92,14 @@ async def teg_single_user_handler(update: Update, context: ContextTypes.DEFAULT_
     _, user_id_str, role_key = query.data.split(":", 2)
     user_id = int(user_id_str)
 
-    # ВАЖНО: Берем класс из ROLE_TO_MODEL, а не имя из ROLE_NAMES
     role_model = ROLE_TO_MODEL.get(role_key)
     
     if not role_model:
-        # Исправлена ошибка: query.message.reply_text вместо query.reply_text
         await query.message.reply_text("❌ Ошибка: неверная роль.")
         return
     
     session = Session()
     try:
-        # Теперь тут правильно: session.query(<Класс: Exp>)
         role_user = session.query(role_model).filter_by(user_id=user_id).first()
         
         if not role_user or not role_user.username:
@@ -113,10 +109,11 @@ async def teg_single_user_handler(update: Update, context: ContextTypes.DEFAULT_
     finally:
         session.close()
 
+    # Получаем ID группы
     group_id = context.bot_data.get("last_admin_group_id")
     if not group_id:
         await query.message.reply_text(
-            "❌ Не удалось определить группу для тега. Напишите что-нибудь в группе."
+            "❌ Не удалось определить группу для тега. Напишите что-нибудь в группе (любое сообщение)."
         )
         return
 
@@ -130,7 +127,7 @@ async def teg_single_user_handler(update: Update, context: ContextTypes.DEFAULT_
     except Exception as e:
         await query.message.reply_text(f"❌ Ошибка отправки: {e}")
 
-# --- ТЕГ ВСЕХ ИГРОКОВ (ИСПРАВЛЕНО) ---
+# --- ТЕГ ВСЕХ ИГРОКОВ ---
 
 async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -141,14 +138,13 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     users_with_username = [u for u in users if u.username]
     if not users_with_username:
-        # Исправлена ошибка: query.message.reply_text
         await query.message.reply_text("❌ В категории нет пользователей с username.")
         return
 
     group_id = context.bot_data.get("last_admin_group_id")
     if not group_id:
-        # Исправлена ошибка: query.message.reply_text
-        await query.message.reply_text("❌ Не удалось определить группу. Напишите в группе как админ.")
+        # ИСПРАВЛЕНО: Убрано упоминание "админа", так как тегать могут все
+        await query.message.reply_text("❌ Не удалось определить группу. Напишите любое сообщение в группе, чтобы бот её запомнил.")
         return
 
     chunks = [users_with_username[i:i+4] for i in range(0, len(users_with_username), 4)]
@@ -168,8 +164,6 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
             
             await context.bot.send_message(chat_id=group_id, text=message)
         
-        # Исправлена ошибка: query.message.reply_text
         await query.message.reply_text("✅ Теги отправлены!")
     except Exception as e:
-        # Исправлена ошибка: query.message.reply_text
         await query.message.reply_text(f"❌ Ошибка при теге всех: {e}")

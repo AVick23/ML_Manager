@@ -70,10 +70,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = [
             [
-                InlineKeyboardButton("📅 Игры (CRM)", callback_data=state.CD_MENU_CRM),
-                InlineKeyboardButton("🎲 Микс (Рандом)", callback_data=state.CD_MENU_TOURNAMENT)
-            ],
-            [
                 InlineKeyboardButton("📢 Тегнуть игроков", callback_data=state.CD_MENU_TAG)
             ]
         ]

@@ -22,7 +22,8 @@ from settings import (
     settings_menu, settings_del_user_start, 
     settings_info, handle_global_delete_input
 )
-from profile import profile_command
+# ИМПОРТ: Добавлен who_is_handler
+from profile import profile_command, who_is_handler
 from registration import (
     reg_menu, view_role_handler, back_to_roles_handler, 
     add_to_role_start, del_from_role_start, handle_registration_input,
@@ -47,7 +48,7 @@ from tournament import tournament_menu, mix_conv_handler
 
 load_dotenv()
 
-# --- ДИСПЕТЧЕР ТЕКСТОВЫХ СООБЩЕНИЙ ---
+# --- ДИСПЕТЧЕР ТЕКСТОВЫХ СООБЩЕНИЙ (ЛС) ---
 async def dispatch_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Перенаправляет текстовые сообщения в зависимости от состояния пользователя"""
     u_state = context.user_data
@@ -87,12 +88,17 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
         )
         
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Сохраняет данные пользователя и запоминает ID группы.
+    Доступно ВСЕМ пользователям.
+    """
     if update.effective_chat.type not in ["group", "supergroup"]:
         return
 
     user = update.effective_user
     chat = update.effective_chat
 
+    # Сохраняем/обновляем пользователя в базе
     await db.save_user(
         user_id=user.id,
         first_name=user.first_name,
@@ -100,10 +106,9 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         username=user.username
     )
     
-    if user.id in ADMIN_IDS:
-        context.bot_data["last_admin_group_id"] = chat.id
+    # Запоминаем ID группы, чтобы работала функция "Тегнуть всех"
+    context.bot_data["last_admin_group_id"] = chat.id
 
-# --- ОБРАБОТКА ОШИБОК ---
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     if context.error is None: return
@@ -122,16 +127,42 @@ def main():
     application = Application.builder().token(bot_token).build()
     application.add_error_handler(error_handler)
     
+    # ==========================================
     # 1. Системные и групповые хендлеры
-    application.add_handler(ChatMemberHandler(on_chat_member_update))
-    application.add_handler(MessageHandler(filters.ChatType.GROUPS, handle_group_message))
+    # ==========================================
     
+    application.add_handler(ChatMemberHandler(on_chat_member_update))
+    
+    # ГРУППЫ ХЕНДЛЕРОВ (GROUPS):
+    # Используем группы, чтобы несколько хендлеров могли работать одновременно в группе.
+    # Группа 0 (по умолчанию): Сохранение статистики (handle_group_message)
+    # Группа 1: Реакция на "Кто" (who_is_handler)
+    
+    # Группа 0: Сохраняет юзера и ID группы для тегов. Всегда работает.
+    application.add_handler(
+        MessageHandler(filters.ChatType.GROUPS, handle_group_message), 
+        group=0
+    )
+    
+    # Группа 1: Проверяет, не написал ли кто-то "Кто" в ответ. 
+    # Если условие не выполнено, просто пропускает сообщение.
+    application.add_handler(
+        MessageHandler(filters.ChatType.GROUPS & filters.TEXT & filters.REPLY, who_is_handler), 
+        group=1
+    )
+    
+    # ==========================================
     # 2. Команды
+    # ==========================================
+    
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("me", profile_command))
+    application.add_handler(CommandHandler("me", profile_command)) # Доступна всем
     application.add_handler(CommandHandler("join", join_menu))
     
+    # ==========================================
     # 3. Главное меню (Dashboard Callbacks)
+    # ==========================================
+    
     application.add_handler(CallbackQueryHandler(show_all_players, pattern=f"^{state.CD_MENU_PLAYERS}"))
     application.add_handler(CallbackQueryHandler(reg_menu, pattern=f"^{state.CD_MENU_REG}$"))
     application.add_handler(CallbackQueryHandler(tag_menu, pattern=f"^{state.CD_MENU_TAG}$"))
@@ -140,7 +171,10 @@ def main():
     application.add_handler(CallbackQueryHandler(settings_menu, pattern=f"^{state.CD_MENU_SETTINGS}$"))
     application.add_handler(CallbackQueryHandler(back_to_menu_handler, pattern=f"^{state.CD_BACK_TO_MENU}$"))
     
+    # ==========================================
     # 4. Регистрация (Registration Callbacks)
+    # ==========================================
+    
     application.add_handler(CallbackQueryHandler(view_role_handler, pattern=f"^{state.CD_VIEW_ROLE}:"))
     
     # Добавление
@@ -155,13 +189,19 @@ def main():
     
     application.add_handler(CallbackQueryHandler(back_to_roles_handler, pattern=f"^{state.CD_BACK_TO_ROLES}$"))
     
+    # ==========================================
     # 5. Теги (Tag Callbacks)
+    # ==========================================
+    
     application.add_handler(CallbackQueryHandler(teg_view_role_handler, pattern=f"^{state.CD_TEG_ROLE}:"))
     application.add_handler(CallbackQueryHandler(teg_single_user_handler, pattern=f"^{state.CD_TEG_USER}:"))
     application.add_handler(CallbackQueryHandler(teg_all_users_handler, pattern=f"^{state.CD_TEG_ALL}:"))
     application.add_handler(CallbackQueryHandler(teg_back_handler, pattern=f"^{state.CD_TEG_BACK}$"))
     
+    # ==========================================
     # 6. CRM (Игры и Планирование)
+    # ==========================================
+    
     application.add_handler(CallbackQueryHandler(crm_create_event_start, pattern="^crm_create_event$"))
     
     # КАЛЕНДАРЬ
@@ -180,17 +220,25 @@ def main():
     # ЗАПИСЬ ИГРОКОВ
     application.add_handler(CallbackQueryHandler(handle_event_action, pattern=r"^event_(join|leave):"))
     
+    # ==========================================
     # 7. Микс (Турнир)
+    # ==========================================
+    
     # ВАЖНО: ConversationHandler должен стоять ДО обычных MessageHandler с текстом!
     application.add_handler(mix_conv_handler)
     
+    # ==========================================
     # 8. Настройки (Settings Callbacks)
+    # ==========================================
+    
     application.add_handler(CallbackQueryHandler(settings_del_user_start, pattern="^settings_del_user$"))
     application.add_handler(CallbackQueryHandler(settings_info, pattern="^settings_info$"))
     
+    # ==========================================
     # 9. Текстовый ввод (Unified Handler)
-    # УБРАЛ СТАРЫЕ ТРИ MessageHandler'а
-    # ДОБАВИЛ ОДИН ЕДИНЫЙ ДИСПЕТЧЕР
+    # ==========================================
+    
+    # Обработчик текста в ЛС (диспетчер состояний)
     application.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
@@ -198,11 +246,15 @@ def main():
         )
     )
     
+    # ==========================================
+    # ЗАПУСК
+    # ==========================================
+    
     # ЗАПУСК ПЛАНИРОВЩИКА (Отправка уведомлений о матчах)
     start_scheduler(application)
     
     # ВОССТАНОВЛЯЕМ ФУНКЦИЮ run_polling
-    application.run_polling() # <--- ВОЗВРАЩАТЬ ЭТО
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
