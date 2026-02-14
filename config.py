@@ -23,11 +23,17 @@ if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN не найден в .env файле!")
 
 # Список ID администраторов (через запятую в .env)
+# === АДМИНЫ ===
+
 ADMIN_IDS = [
     int(uid.strip()) 
     for uid in os.getenv("ADMIN_IDS", "").split(",") 
     if uid.strip()
 ]
+
+def is_user_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
 
 # ID группы для уведомлений (обязательный параметр)
 # Пример: GROUP_ID=-100XXXXXXXXXX
