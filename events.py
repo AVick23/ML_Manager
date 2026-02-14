@@ -5,10 +5,9 @@
 from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from telegram.helpers import mention_html
 
 from db import Event, EventParticipant, User, Session
-from config import is_user_admin, ADMIN_IDS, GROUP_ID, logger
+from config import ADMIN_IDS, GROUP_ID, logger
 import state
 
 # Формат даты для хранения в БД
@@ -16,12 +15,6 @@ DATE_FORMAT = "%Y-%m-%d %H:%M"
 
 # Часовой пояс Москвы (UTC+3)
 MSK_TZ = timezone(timedelta(hours=3))
-
-
-def escape_markdown(text):
-    """Экранирует спецсимволы Markdown"""
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return ''.join(f'\\{char}' if char in escape_chars else char for char in str(text))
 
 
 def get_group_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
@@ -35,11 +28,9 @@ def get_group_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
     Returns:
         int | None: ID группы или None
     """
-    # Приоритет - GROUP_ID из конфига
     if GROUP_ID:
         return GROUP_ID
     
-    # Fallback - автоопределение
     group_id = context.bot_data.get("last_admin_group_id")
     
     if not group_id:
@@ -52,7 +43,7 @@ def format_user_mention(user: User) -> str:
     """
     Форматирует упоминание пользователя.
     Если есть username - возвращает @username
-    Если нет - возвращает кликабельное упоминание через mention_html
+    Если нет - возвращает имя или "Игрок"
     
     Args:
         user: Объект User из БД
@@ -62,9 +53,11 @@ def format_user_mention(user: User) -> str:
     """
     if user.username:
         return f"@{user.username}"
+    elif user.first_name:
+        # Просто имя, без разметки
+        return user.first_name
     else:
-        # Используем HTML-упоминание по ID
-        return mention_html(user.user_id, user.first_name or "Игрок")
+        return "Игрок"
 
 
 # ==========================================
@@ -79,7 +72,6 @@ async def crm_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = query.from_user.id if query else update.effective_user.id
     
-    # Проверка прав администратора
     if user_id not in ADMIN_IDS:
         msg = "❌ Эта функция доступна только администраторам."
         if query:
@@ -95,7 +87,7 @@ async def crm_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
     
-    text = "📅 **Планирование игр (CRM)**\n\n"
+    text = "📅 Планирование игр (CRM)\n\n"
     
     if not events:
         text += "Активных игр нет."
@@ -105,19 +97,16 @@ async def crm_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     else:
         for ev in events:
-            # Считаем участников
             session2 = Session()
             try:
                 count = session2.query(EventParticipant).filter_by(event_id=ev.id).count()
             finally:
                 session2.close()
             
-            safe_title = escape_markdown(ev.title)
-            text += f"📆 {safe_title}\n"
+            text += f"📆 {ev.title}\n"
             text += f"🕒 {ev.event_time} (МСК)\n"
             text += f"👥 Участников: {count}\n\n"
         
-        # Генерируем клавиатуру с кнопками для каждой игры
         keyboard = []
         for ev in events:
             btn_view = InlineKeyboardButton("👥 Состав", callback_data=f"evt_view:{ev.id}")
@@ -130,14 +119,12 @@ async def crm_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query:
         await query.edit_message_text(
             text, 
-            reply_markup=InlineKeyboardMarkup(keyboard), 
-            parse_mode='Markdown'
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
     else:
         await update.message.reply_text(
             text, 
-            reply_markup=InlineKeyboardMarkup(keyboard), 
-            parse_mode='Markdown'
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
 
@@ -149,7 +136,7 @@ async def crm_create_event_start(update: Update, context: ContextTypes.DEFAULT_T
     
     context.user_data["crm_state"] = "awaiting_title"
     
-    text = "➕ **Создание новой игры**\n\n"
+    text = "➕ Создание новой игры\n\n"
     text += "1. Введите название игры (например: Турнир против Team Alpha)."
     
     if query:
@@ -171,7 +158,6 @@ async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     now = datetime.now(MSK_TZ)
     
-    # Генерируем кнопки на ближайшие 7 дней
     for i in range(0, 8):
         event_date = now + timedelta(days=i)
         day_name = event_date.strftime("%d %b (%a)")
@@ -261,7 +247,6 @@ async def handle_crm_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["event_title"] = title
         context.user_data["crm_state"] = "awaiting_date"
         
-        # Вызываем функцию с кнопками даты
         return await ask_date(update, context)
 
 
@@ -310,18 +295,13 @@ async def evt_back_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def evt_select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Обработка нажатия на минуту и СОЗДАНИЕ ИГРЫ.
-    
-    ИСПРАВЛЕНО: Добавлено уведомление в группу при создании игры.
-    """
+    """Обработка нажатия на минуту и создание игры"""
     query = update.callback_query
     await query.answer()
     
     _, minute_str = query.data.split(":")
     minute = int(minute_str)
     
-    # Считываем данные из контекста
     offset = context.user_data.get("crm_day_offset", 0)
     hour = context.user_data.get("crm_hour", 0)
     title = context.user_data.get("event_title")
@@ -329,7 +309,6 @@ async def evt_select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not title:
         return await query.message.reply_text("❌ Ошибка: Название утеряно. Начните заново.")
     
-    # Формируем дату и время по московскому времени
     now_msk = datetime.now(MSK_TZ)
     target_date_msk = now_msk + timedelta(days=offset)
     target_date_msk = target_date_msk.replace(
@@ -339,7 +318,6 @@ async def evt_select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         microsecond=0
     )
     
-    # Сохраняем в БД
     event_time_str = target_date_msk.strftime(DATE_FORMAT)
     
     session = Session()
@@ -357,21 +335,20 @@ async def evt_select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
     
-    # === НОВОЕ: Уведомление в группу о создании игры ===
+    # Уведомление в группу
     group_id = get_group_id(context)
     
     if group_id:
         try:
             notify_text = (
-                f"🎮 **Новая игра создана!**\n\n"
-                f"📅 Название: {escape_markdown(title)}\n"
+                f"🎮 Новая игра создана!\n\n"
+                f"📅 Название: {title}\n"
                 f"🕒 Время: {event_time_str} (МСК)\n\n"
                 f"📝 Для записи используйте /join в ЛС бота."
             )
             await context.bot.send_message(
                 chat_id=group_id,
-                text=notify_text,
-                parse_mode='Markdown'
+                text=notify_text
             )
             logger.info(f"📢 Уведомление о создании игры отправлено в группу {group_id}")
         except Exception as e:
@@ -379,10 +356,8 @@ async def evt_select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         logger.warning("⚠️ GROUP_ID не настроен, уведомление в группу не отправлено")
     
-    # Очищаем контекст
     context.user_data.clear()
     
-    # Уведомление админу
     msg = (
         f"✅ Игра создана!\n"
         f"Название: {title}\n"
@@ -390,7 +365,6 @@ async def evt_select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await query.message.reply_text(msg)
     
-    # Возвращаемся в меню CRM
     return await crm_menu(update, context)
 
 
@@ -413,7 +387,6 @@ async def evt_view_participants(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
     
-    # Парсинг ID
     event_id_str = query.data.split(":")[1]
     event_id = int(event_id_str)
     
@@ -425,14 +398,12 @@ async def evt_view_participants(update: Update, context: ContextTypes.DEFAULT_TY
         
         participants = session.query(EventParticipant).filter_by(event_id=event_id).all()
         
-        # Получаем данные пользователей
         user_ids = [p.user_id for p in participants]
         users = session.query(User).filter(User.user_id.in_(user_ids)).all() if user_ids else []
         
-        # Создаём мапу user_id -> User
         user_map = {u.user_id: u for u in users}
         
-        text = f"📋 **Состав игры:** {escape_markdown(event.title)}\n\n"
+        text = f"📋 Состав игры: {event.title}\n\n"
         
         if not participants:
             text += "Пока никто не записался."
@@ -444,13 +415,11 @@ async def evt_view_participants(update: Update, context: ContextTypes.DEFAULT_TY
                 else:
                     text += f"• Пользователь ID: {p.user_id}\n"
         
-        # Кнопка возврата
         keyboard = [[InlineKeyboardButton("⬅ Назад", callback_data="back_to_crm_menu")]]
         
         await query.edit_message_text(
             text, 
-            reply_markup=InlineKeyboardMarkup(keyboard), 
-            parse_mode='Markdown'
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
     finally:
@@ -462,7 +431,6 @@ async def evt_delete_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    # Парсинг ID
     event_id_str = query.data.split(":")[1]
     event_id = int(event_id_str)
     
@@ -474,18 +442,14 @@ async def evt_delete_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         event_title = event.title
         
-        # Сначала удаляем участников
         deleted_count = session.query(EventParticipant).filter_by(event_id=event_id).delete()
-        
-        # Потом удаляем саму игру
         session.delete(event)
         session.commit()
         
         logger.info(f"🗑 Игра '{event_title}' удалена. Удалено участников: {deleted_count}")
         
-        await query.message.reply_text(f"✅ Игра {escape_markdown(event_title)} удалена.")
+        await query.message.reply_text(f"✅ Игра {event_title} удалена.")
         
-        # Обновляем меню
         return await crm_menu(update, context)
         
     except Exception as e:
@@ -529,11 +493,10 @@ async def join_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 return await update.message.reply_text(msg)
         
-        text = "📋 **Выберите игру для записи:**\n\n"
+        text = "📋 Выберите игру для записи:\n\n"
         keyboard = []
         
         for ev in events:
-            # Проверяем, записан ли пользователь
             is_joined = session.query(EventParticipant).filter_by(
                 event_id=ev.id, 
                 user_id=user_id
@@ -546,14 +509,12 @@ async def join_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if query:
             await query.edit_message_text(
                 text, 
-                reply_markup=InlineKeyboardMarkup(keyboard), 
-                parse_mode='Markdown'
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
         else:
             await update.message.reply_text(
                 text, 
-                reply_markup=InlineKeyboardMarkup(keyboard), 
-                parse_mode='Markdown'
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
     finally:
@@ -598,8 +559,6 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return await query.answer("Вы не были записаны.")
         
         session.commit()
-        
-        # Обновляем меню
         await join_menu(update, context)
         
     except Exception as e:
@@ -617,12 +576,7 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
     """
     Функция запускается раз в минуту планировщиком.
-    
-    ИСПРАВЛЕНО:
-    1. Использует диапазон времени ±1 минута для надёжности
-    2. Получает GROUP_ID из config.py с fallback на bot_data
-    3. Добавлено логирование
-    4. Обрабатывает пользователей без username
+    Проверяет наступление событий и отправляет уведомления в группу.
     """
     session = Session()
     
@@ -630,13 +584,11 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
         now_msk = datetime.now(MSK_TZ)
         now_str = now_msk.strftime(DATE_FORMAT)
         
-        # === ИСПРАВЛЕНО: Диапазон времени ±1 минута ===
         now_minus_1 = (now_msk - timedelta(minutes=1)).strftime(DATE_FORMAT)
         now_plus_1 = (now_msk + timedelta(minutes=1)).strftime(DATE_FORMAT)
         
         logger.debug(f"🔍 Проверка событий: {now_str} (диапазон: {now_minus_1} - {now_plus_1})")
         
-        # Ищем события в диапазоне
         events = session.query(Event).filter(
             Event.event_time >= now_minus_1,
             Event.event_time <= now_plus_1,
@@ -644,11 +596,10 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
         ).all()
         
         if not events:
-            return  # Нет событий для уведомления
+            return
         
         logger.info(f"🎯 Найдено {len(events)} событий для уведомления")
         
-        # Получаем ID группы
         group_id = get_group_id(context)
         
         if not group_id:
@@ -657,7 +608,6 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
         
         for ev in events:
             try:
-                # Получаем участников
                 participants = session.query(EventParticipant).filter_by(event_id=ev.id).all()
                 
                 if not participants:
@@ -665,21 +615,17 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
                     ev.status = 'Done'
                     continue
                 
-                # Получаем данные пользователей
                 user_ids = [p.user_id for p in participants]
                 users = session.query(User).filter(User.user_id.in_(user_ids)).all()
                 
-                # Формируем упоминания
                 mentions = [format_user_mention(u) for u in users]
                 tags_text = " ".join(mentions)
                 
-                safe_title = escape_markdown(ev.title)
-                
-                # Отправляем уведомление
+                # Отправляем уведомление без разметки
                 if tags_text:
                     message = (
-                        f"📢 **НАЧАЛО ИГРЫ!**\n\n"
-                        f"Мероприятие: {safe_title}\n"
+                        f"📢 НАЧАЛО ИГРЫ!\n\n"
+                        f"Мероприятие: {ev.title}\n"
                         f"Время: {ev.event_time}\n\n"
                         f"Призыв:\n{tags_text}\n\n"
                         f"Гоу ребята!"
@@ -687,13 +633,11 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
                     
                     await context.bot.send_message(
                         chat_id=group_id, 
-                        text=message, 
-                        parse_mode='Markdown'
+                        text=message
                     )
                     
                     logger.info(f"📢 Уведомление для игры '{ev.title}' отправлено в группу {group_id}")
                 
-                # Меняем статус
                 ev.status = 'Done'
                 
             except Exception as e:
