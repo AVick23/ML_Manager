@@ -1,13 +1,22 @@
+"""
+Модуль тегирования (призыва) игроков по ролям.
+"""
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+
+from config import GROUP_ID, logger
 from db import get_role_users, ROLE_NAMES, ROLE_TO_MODEL, Session
 import state
 
 ITEMS_PER_PAGE = 10
 
-# --- МЕНЮ ВЫБОРА РОЛИ ДЛЯ ТЕГА ---
+
+# ==========================================
+# МЕНЮ ВЫБОРА РОЛИ ДЛЯ ТЕГА
+# ==========================================
 
 async def tag_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню выбора роли для тегирования"""
     query = update.callback_query
     await query.answer()
     
@@ -21,9 +30,13 @@ async def tag_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text("Выберите категорию для тега:", reply_markup=reply_markup)
 
-# --- ВЫБОР ИГРОКА С ПАГИНАЦИЕЙ ---
+
+# ==========================================
+# ВЫБОР ИГРОКА С ПАГИНАЦИЕЙ
+# ==========================================
 
 async def teg_view_role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Просмотр списка игроков роли для тегирования"""
     query = update.callback_query
     await query.answer()
 
@@ -62,9 +75,7 @@ async def teg_view_role_handler(update: Update, context: ContextTypes.DEFAULT_TY
     nav_buttons = []
     if page > 1:
         nav_buttons.append(InlineKeyboardButton("⬅️", callback_data=f"{state.CD_TEG_ROLE}:{role_key}:{page-1}"))
-    
     nav_buttons.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="ignore"))
-    
     if page < total_pages:
         nav_buttons.append(InlineKeyboardButton("➡️", callback_data=f"{state.CD_TEG_ROLE}:{role_key}:{page+1}"))
     
@@ -78,14 +89,20 @@ async def teg_view_role_handler(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+
 async def teg_back_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат к меню выбора роли"""
     query = update.callback_query
     await query.answer()
     await tag_menu(update, context)
 
-# --- ТЕГ ОДНОГО ИГРОКА ---
+
+# ==========================================
+# ТЕГ ОДНОГО ИГРОКА
+# ==========================================
 
 async def teg_single_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тегирование одного игрока"""
     query = update.callback_query
     await query.answer()
 
@@ -110,10 +127,11 @@ async def teg_single_user_handler(update: Update, context: ContextTypes.DEFAULT_
         session.close()
 
     # Получаем ID группы
-    group_id = context.bot_data.get("last_admin_group_id")
+    group_id = GROUP_ID or context.bot_data.get("last_admin_group_id")
+    
     if not group_id:
         await query.message.reply_text(
-            "❌ Не удалось определить группу для тега. Напишите что-нибудь в группе (любое сообщение)."
+            "❌ Не удалось определить группу для тега. Напишите что-нибудь в группе."
         )
         return
 
@@ -121,15 +139,21 @@ async def teg_single_user_handler(update: Update, context: ContextTypes.DEFAULT_
         role_name = ROLE_NAMES.get(role_key, "неизвестная роль")
         await context.bot.send_message(
             chat_id=group_id,
-            text=f"📢 Тег по роли «{role_name}»:\n👉 @{role_user.username} (ID ML: {id_ml})\n Ты нужен на землях рассвета"
+            text=f"📢 Тег по роли «{role_name}»:\n👉 @{role_user.username} (ID ML: {id_ml})\nТы нужен на землях рассвета"
         )
         await query.message.reply_text(f"✅ @{role_user.username} тегнут в группу!")
+        logger.info(f"📢 Тег @%s отправлен в группу %s", role_user.username, group_id)
     except Exception as e:
         await query.message.reply_text(f"❌ Ошибка отправки: {e}")
+        logger.error(f"❌ Ошибка тегирования: {e}")
 
-# --- ТЕГ ВСЕХ ИГРОКОВ ---
+
+# ==========================================
+# ТЕГ ВСЕХ ИГРОКОВ
+# ==========================================
 
 async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тегирование всех игроков роли"""
     query = update.callback_query
     await query.answer()
 
@@ -141,10 +165,12 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await query.message.reply_text("❌ В категории нет пользователей с username.")
         return
 
-    group_id = context.bot_data.get("last_admin_group_id")
+    group_id = GROUP_ID or context.bot_data.get("last_admin_group_id")
+    
     if not group_id:
-        # ИСПРАВЛЕНО: Убрано упоминание "админа", так как тегать могут все
-        await query.message.reply_text("❌ Не удалось определить группу. Напишите любое сообщение в группе, чтобы бот её запомнил.")
+        await query.message.reply_text(
+            "❌ Не удалось определить группу. Напишите любое сообщение в группе."
+        )
         return
 
     chunks = [users_with_username[i:i+4] for i in range(0, len(users_with_username), 4)]
@@ -165,5 +191,7 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
             await context.bot.send_message(chat_id=group_id, text=message)
         
         await query.message.reply_text("✅ Теги отправлены!")
+        logger.info(f"📢 Тег всех игроков роли {role_key} отправлен в группу {group_id}")
     except Exception as e:
         await query.message.reply_text(f"❌ Ошибка при теге всех: {e}")
+        logger.error(f"❌ Ошибка тегирования всех: {e}")

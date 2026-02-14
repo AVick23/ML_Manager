@@ -1,16 +1,25 @@
+"""
+Модуль настроек и утилит бота.
+"""
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+
+from config import ADMIN_IDS, logger
 from db import (
-    get_all_users, is_user_admin, 
-    ROLE_NAMES, ROLE_TO_MODEL, Session, User, ADMIN_IDS
+    get_all_users,
+    ROLE_NAMES, ROLE_TO_MODEL, Session, User
 )
 import state
 
+
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню настроек и утилит"""
     query = update.callback_query
     await query.answer()
     
-    if not await is_user_admin(query.from_user.id):
+    user_id = query.from_user.id
+    
+    if user_id not in ADMIN_IDS:
         await query.edit_message_text("❌ Эта функция доступна только администраторам.")
         return
 
@@ -30,8 +39,9 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
+
 async def settings_del_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Запуск процедуры полного удаления игрока """
+    """Запуск процедуры полного удаления игрока"""
     query = update.callback_query
     await query.answer()
     
@@ -46,13 +56,15 @@ async def settings_del_user_start(update: Update, context: ContextTypes.DEFAULT_
         parse_mode='Markdown'
     )
 
+
 async def handle_global_delete_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Обработка ввода логина для удаления """
-    # Проверяем, что мы в нужном состоянии
+    """Обработка ввода логина для удаления"""
     if context.user_data.get("settings_state") != "awaiting_global_del_username":
         return
     
-    if not await is_user_admin(update.effective_user.id):
+    user_id = update.effective_user.id
+    
+    if user_id not in ADMIN_IDS:
         return
 
     username = update.message.text.strip()
@@ -65,7 +77,6 @@ async def handle_global_delete_input(update: Update, context: ContextTypes.DEFAU
         if not user:
             return await update.message.reply_text("❌ Пользователь с таким ником не найден в базе.")
         
-        # Собираем информацию об удаляемых ролях для отчета
         deleted_roles = []
         
         # Удаляем из всех ролей
@@ -75,11 +86,10 @@ async def handle_global_delete_input(update: Update, context: ContextTypes.DEFAU
                 session.delete(entry)
                 deleted_roles.append(ROLE_NAMES[role_key])
         
-        # Удаляем самого пользователя
+        # Удаляем пользователя
         session.delete(user)
         session.commit()
         
-        # Очищаем состояние
         context.user_data.pop("settings_state", None)
         
         roles_str = ", ".join(deleted_roles) if deleted_roles else "Нет"
@@ -88,14 +98,18 @@ async def handle_global_delete_input(update: Update, context: ContextTypes.DEFAU
             f"Удалены роли: {roles_str}."
         )
         
+        logger.info(f"🗑 Игрок @{user.username} полностью удалён. Роли: {roles_str}")
+        
     except Exception as e:
         session.rollback()
         await update.message.reply_text(f"❌ Ошибка при удалении: {e}")
+        logger.error(f"❌ Ошибка при удалении игрока: {e}")
     finally:
         session.close()
 
+
 async def settings_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Полная инструкция по боту """
+    """Полная инструкция по боту"""
     query = update.callback_query
     await query.answer()
     

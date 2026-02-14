@@ -1,9 +1,16 @@
+"""
+Модуль стартового меню и главной страницы бота.
+"""
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from db import is_user_admin, save_user, ADMIN_IDS
+
+from config import ADMIN_IDS, logger
+from db import save_user
 import state
 
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /start"""
     if update.effective_chat.type != "private":
         await update.message.reply_text(
             "❌ Эта команда доступна только в личных сообщениях с ботом."
@@ -13,8 +20,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = update.effective_user
 
-    # 1. Всегда сохраняем/обновляем пользователя в БД при старте.
-    # Это нужно, чтобы бот работал корректно для всех, даже если они только пришли в ЛС.
+    # Сохраняем/обновляем пользователя в БД
     await save_user(
         user_id=user.id,
         first_name=user.first_name,
@@ -22,12 +28,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         username=user.username
     )
     
+    logger.info(f"👤 Пользователь {user_id} ({user.first_name}) запустил бота")
+    
     await show_main_menu(update, context)
 
+
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отображает главное меню бота"""
     query = update.callback_query
     
-    # Определяем ID пользователя (если это callback или новое сообщение)
+    # Определяем ID пользователя
     if update.effective_user:
         user_id = update.effective_user.id
     elif query:
@@ -35,7 +45,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         return
     
-    is_admin = await is_user_admin(user_id)
+    is_admin = user_id in ADMIN_IDS
     
     text = ""
     keyboard = []
@@ -69,9 +79,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         keyboard = [
-            [
-                InlineKeyboardButton("📢 Тегнуть игроков", callback_data=state.CD_MENU_TAG)
-            ]
+            [InlineKeyboardButton("📢 Тегнуть игроков", callback_data=state.CD_MENU_TAG)]
         ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -82,10 +90,11 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
     except Exception as e:
-        # Игнорируем ошибку, если текст не изменился
-        pass
+        logger.debug(f"Не удалось обновить меню: {e}")
+
 
 async def back_to_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик возврата в главное меню"""
     query = update.callback_query
     if query:
         await query.answer()

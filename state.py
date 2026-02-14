@@ -1,3 +1,7 @@
+"""
+Константы состояний и префиксов для callback-кнопок.
+"""
+
 # --- Константы для состояний (states) ---
 REG_AWAITING_USERNAME = "awaiting_username"
 REG_AWAITING_IDML = "awaiting_idml"
@@ -8,7 +12,7 @@ CD_MENU_PLAYERS = "menu_players"
 CD_MENU_REG = "menu_reg"
 CD_MENU_TAG = "menu_tag"
 CD_MENU_CRM = "menu_crm"
-CD_MENU_TOURNAMENT = "menu_tournament"  # <--- ДОБАВЛЕНО
+CD_MENU_TOURNAMENT = "menu_tournament"
 CD_MENU_SETTINGS = "menu_settings"
 CD_BACK_TO_MENU = "back_to_menu"
 

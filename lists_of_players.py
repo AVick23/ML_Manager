@@ -1,23 +1,32 @@
+"""
+Модуль отображения списка всех игроков.
+"""
+import asyncio
+import html
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from db import get_all_users, is_user_admin, ADMIN_IDS, Session, ROLE_TO_MODEL, ROLE_NAMES
+
+from config import ADMIN_IDS, logger
+from db import get_all_users, Session, ROLE_TO_MODEL, ROLE_NAMES
 import state
-import asyncio
-import html  # Стандартная библиотека для экранирования HTML
 
 ITEMS_PER_PAGE = 10
+
 
 def escape_html(text):
     """Экранирует спецсимволы для HTML (<, >, &)"""
     return html.escape(str(text))
 
+
 async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает список всех пользователей с пагинацией"""
     query = update.callback_query
     await query.answer()
     
     user_id = update.effective_user.id
     
-    if not await is_user_admin(user_id):
+    if user_id not in ADMIN_IDS:
         await query.edit_message_text("❌ У вас нет прав для просмотра этого раздела.")
         return
 
@@ -48,15 +57,16 @@ async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📄 Страница {page}/{total_pages}\n\n"
     )
     
-    # --- ЛОГИКА ПРОВЕРКИ РОЛЕЙ ---
+    # Логика проверки ролей
     def get_roles_for_page_sync():
         session = Session()
         try:
-            user_roles = {} # {user_id: [RoleName1, RoleName2]}
+            user_roles = {}
             
             for role_key, Model in ROLE_TO_MODEL.items():
-                # Ищем записи в таблице роли, где user_id есть в списке текущей страницы
-                role_entries = session.query(Model).filter(Model.user_id.in_([u.user_id for u in page_users])).all()
+                role_entries = session.query(Model).filter(
+                    Model.user_id.in_([u.user_id for u in page_users])
+                ).all()
                 
                 for entry in role_entries:
                     uid = entry.user_id
@@ -71,29 +81,24 @@ async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finally:
             session.close()
 
-    # Запускаем в отдельном потоке
     user_roles_map = await asyncio.to_thread(get_roles_for_page_sync)
 
     # Формируем сообщение
     for user in page_users:
-        # ИСПРАВЛЕНО: заменено "или" на "or"
         full_name = f"{user.first_name} {user.last_name or ''}".strip() or "Не указано имя"
         username = f"@{user.username}" if user.username else "нет username"
         admin_status = "✅ Админ" if user.user_id in ADMIN_IDS else "❌ Игрок"
         
-        # Экранируем ВСЕ переменные
         safe_name = escape_html(full_name)
         safe_username = escape_html(username)
         safe_admin_status = escape_html(admin_status)
         
-        # Проверяем роли
         roles = user_roles_map.get(user.user_id, [])
         if roles:
             role_text = ", ".join([escape_html(r) for r in roles])
         else:
             role_text = "⚪ Без роли"
         
-        # Формируем строки. Используем \n для переносов вместо <br>
         message += f"• <code>{user.user_id}</code> | {safe_name} ({safe_username})\n"
         message += f"  {safe_admin_status} | {role_text}\n\n"
     
@@ -119,8 +124,7 @@ async def show_all_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='HTML')
     except Exception as e:
-        print(f"❌ Ошибка при отправке списка игроков: {e}")
-        # Fallback на случай ошибки (например, слишком длинное сообщение)
+        logger.error(f"❌ Ошибка при отправке списка игроков: {e}")
         try:
             await query.edit_message_text("⚠️ Слишком длинный список или ошибка данных.", reply_markup=reply_markup)
         except Exception:

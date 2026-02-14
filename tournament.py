@@ -1,18 +1,28 @@
+"""
+Модуль турнира и генерации случайных команд (Микс).
+"""
 import random
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters, CallbackQueryHandler
+
+from config import logger
 from db import User, Session
 import state
 
-# Кастомный фильтр для проверки, является ли сообщение пересланным
-async def is_forwarded(update, context):
-    return bool(update.message.forward_from)
-
 STATE_MIX_LIST = 1
 
+
+async def is_forwarded(update, context):
+    """Фильтр для пересланных сообщений"""
+    return bool(update.message.forward_from)
+
+
 async def tournament_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню турнира и микса"""
     query = update.callback_query
-    if query: await query.answer()
+    if query:
+        await query.answer()
     
     text = "🔀 **Генератор команд (Mix)**\n\n"
     text += "Режим для тренировочных игр и скримов.\n\n"
@@ -27,9 +37,12 @@ async def tournament_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
+
 async def mix_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запуск режима микса"""
     query = update.callback_query
-    if query: await query.answer()
+    if query:
+        await query.answer()
     
     context.user_data["mix_participants"] = []
     
@@ -52,13 +65,13 @@ async def mix_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return STATE_MIX_LIST
 
+
 async def mix_add_participant(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Обрабатываем пересланные сообщения """
+    """Обрабатывает пересланные сообщения"""
     if update.message.forward_from:
         user_id = update.message.forward_from.id
         user_name = update.message.forward_from.first_name
         
-        # Избегаем дублей
         parts = context.user_data.get("mix_participants", [])
         if user_id not in [p['id'] for p in parts]:
             parts.append({'id': user_id, 'name': user_name})
@@ -71,10 +84,12 @@ async def mix_add_participant(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     return STATE_MIX_LIST
 
+
 async def mix_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Создаем команды """
+    """Создаёт случайные команды"""
     query = update.callback_query
-    if query: await query.answer()
+    if query:
+        await query.answer()
     
     participants = context.user_data.get("mix_participants", [])
     
@@ -111,24 +126,30 @@ async def mix_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [[InlineKeyboardButton("⬅ В меню", callback_data=state.CD_BACK_TO_MENU)]]
     
-    # Отправляем результат
     if query:
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     else:
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     
+    logger.info(f"🎲 Микс создан: RED={len(team_a)}, BLUE={len(team_b)}")
+    
     context.user_data["mix_participants"] = []
     return ConversationHandler.END
 
+
 async def mix_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена микса"""
     query = update.callback_query
-    if query: await query.answer()
+    if query:
+        await query.answer()
     
     context.user_data["mix_participants"] = []
-    # Возвращаемся в меню
+    logger.info("❌ Микс отменён")
+    
     from start import show_main_menu
     await show_main_menu(update, context)
     return ConversationHandler.END
+
 
 # Conversation Handler для режима микса
 mix_conv_handler = ConversationHandler(
@@ -141,5 +162,5 @@ mix_conv_handler = ConversationHandler(
         ],
     },
     fallbacks=[CallbackQueryHandler(mix_cancel, pattern="^tourn_cancel$")],
-    per_message=False  # <--- ДОБАВИТЬ ЭТУ СТРОКУ
+    per_message=False
 )
