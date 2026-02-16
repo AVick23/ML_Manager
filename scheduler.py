@@ -8,7 +8,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.schedulers.base import STATE_RUNNING
 
 from config import logger, SCHEDULER_INTERVAL_MINUTES
-from events import check_and_notify_events
+from events.handlers import check_and_notify_events
 
 # Инициализация планировщика
 scheduler = AsyncIOScheduler()
