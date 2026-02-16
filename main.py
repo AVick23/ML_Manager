@@ -36,7 +36,7 @@ from tag_players import (
     tag_menu, teg_view_role_handler, teg_single_user_handler,
     teg_all_users_handler, teg_back_handler
 )
-# НОВЫЕ ИМПОРТЫ ИЗ ПАПКИ events
+# Импорты из папки events (новая структура)
 from events.handlers import (
     events_menu, show_event_detail, handle_event_action,
     create_event_start, handle_text_input as handle_crm_input,
@@ -70,14 +70,13 @@ async def dispatch_private_text(update: Update, context: ContextTypes.DEFAULT_TY
 # ==========================================
 
 async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка изменения состава чата (добавление/удаление участников)"""
+    """Обработка изменения состава чата"""
     if not update.chat_member:
         return
     
     result = update.chat_member
     new_member = result.new_chat_member
 
-    # Бот был добавлен в группу
     if new_member.user.id == context.bot.id:
         if new_member.status == "member":
             chat_id = update.effective_chat.id
@@ -88,10 +87,8 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
             
             if not GROUP_ID:
                 context.bot_data["last_admin_group_id"] = chat_id
-                logger.info(f"📌 Группа {chat_id} сохранена для уведомлений")
         return
 
-    # Новый участник в группе
     if new_member.status not in ["left", "kicked"]:
         user = new_member.user
         await save_user(
@@ -103,9 +100,7 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Сохраняет данные пользователя и запоминает ID группы.
-    """
+    """Сохраняет данные пользователя и запоминает ID группы"""
     if update.effective_chat.type not in ["group", "supergroup"]:
         return
 
@@ -160,7 +155,6 @@ def main():
     # ==========================================
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("me", profile_command))
-    # Убрали /join - теперь кнопка в меню
 
     # ==========================================
     # 3. Групповые хендлеры
@@ -177,22 +171,19 @@ def main():
     )
 
     # ==========================================
-    # 4. Главное меню (Dashboard Callbacks)
+    # 4. Главное меню
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(show_all_players, pattern=f"^{state.CD_MENU_PLAYERS}"))
     application.add_handler(CallbackQueryHandler(reg_menu, pattern=f"^{state.CD_MENU_REG}$"))
     application.add_handler(CallbackQueryHandler(tag_menu, pattern=f"^{state.CD_MENU_TAG}$"))
-    
-    # === ИЗМЕНЕНО: CD_MENU_CRM теперь открывает events_menu (доступно всем) ===
     application.add_handler(CallbackQueryHandler(events_menu, pattern=f"^{state.CD_MENU_CRM}$"))
-    
     application.add_handler(CallbackQueryHandler(tournament_menu, pattern=f"^{state.CD_MENU_TOURNAMENT}$"))
     application.add_handler(CallbackQueryHandler(settings_menu, pattern=f"^{state.CD_MENU_SETTINGS}$"))
     application.add_handler(CallbackQueryHandler(back_to_menu_handler, pattern=f"^{state.CD_BACK_TO_MENU}$"))
     
     # ==========================================
-    # 5. Регистрация (Registration Callbacks)
+    # 5. Регистрация
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(view_role_handler, pattern=f"^{state.CD_VIEW_ROLE}:"))
@@ -205,7 +196,7 @@ def main():
     application.add_handler(CallbackQueryHandler(back_to_roles_handler, pattern=f"^{state.CD_BACK_TO_ROLES}$"))
     
     # ==========================================
-    # 6. Теги (Tag Callbacks)
+    # 6. Теги (Обновлено)
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(teg_view_role_handler, pattern=f"^{state.CD_TEG_ROLE}:"))
@@ -214,10 +205,9 @@ def main():
     application.add_handler(CallbackQueryHandler(teg_back_handler, pattern=f"^{state.CD_TEG_BACK}$"))
     
     # ==========================================
-    # 7. События (Events Callbacks - Refactored)
+    # 7. События (Events)
     # ==========================================
     
-    # Просмотр и действия
     application.add_handler(CallbackQueryHandler(show_event_detail, pattern=r"^evt_detail:"))
     application.add_handler(CallbackQueryHandler(handle_event_action, pattern=r"^event_(join|leave):"))
     application.add_handler(CallbackQueryHandler(back_to_events_list, pattern="^back_to_evt_list$"))
@@ -241,7 +231,7 @@ def main():
     application.add_handler(mix_conv_handler)
     
     # ==========================================
-    # 9. Настройки (Settings Callbacks)
+    # 9. Настройки
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(settings_del_user_start, pattern="^settings_del_user$"))
@@ -262,12 +252,8 @@ def main():
     # ЗАПУСК
     # ==========================================
     
-    # Примечание: В scheduler.py нужно обновить импорт функции check_and_notify_events
-    # from events.handlers import check_and_notify_events
     start_scheduler(application)
-    
     logger.info("🚀 Бот запущен и готов к работе!")
-    
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
