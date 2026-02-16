@@ -36,12 +36,14 @@ from tag_players import (
     tag_menu, teg_view_role_handler, teg_single_user_handler,
     teg_all_users_handler, teg_back_handler
 )
-from events import (
-    crm_menu, crm_create_event_start, handle_crm_input,
-    join_menu, handle_event_action,
-    evt_select_day, evt_select_hour, evt_select_minute,
-    evt_back_day, evt_back_hour, evt_cancel,
-    evt_view_participants, evt_delete_event, back_to_crm_menu
+# НОВЫЕ ИМПОРТЫ ИЗ ПАПКИ events
+from events.handlers import (
+    events_menu, show_event_detail, handle_event_action,
+    create_event_start, handle_text_input as handle_crm_input,
+    select_day, select_hour, select_minute,
+    back_to_day, back_to_hour, cancel_creation,
+    delete_event, back_to_events_list,
+    check_and_notify_events
 )
 from scheduler import start_scheduler
 from tournament import tournament_menu, mix_conv_handler
@@ -84,7 +86,6 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
                 "✅ Привет! Я запомню эту группу для уведомлений о играх."
             )
             
-            # === ИСПРАВЛЕНО: Запоминаем группу при добавлении бота ===
             if not GROUP_ID:
                 context.bot_data["last_admin_group_id"] = chat_id
                 logger.info(f"📌 Группа {chat_id} сохранена для уведомлений")
@@ -104,7 +105,6 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Сохраняет данные пользователя и запоминает ID группы.
-    Запускается для ВСЕХ сообщений в группе.
     """
     if update.effective_chat.type not in ["group", "supergroup"]:
         return
@@ -119,8 +119,6 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         username=user.username
     )
     
-    # === ИСПРАВЛЕНО: Fallback для GROUP_ID ===
-    # Запоминаем группу только если GROUP_ID не задан в .env
     if not GROUP_ID:
         context.bot_data["last_admin_group_id"] = chat.id
 
@@ -130,7 +128,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     if context.error is None:
         return
     
-    # Игнорируем известные не критичные ошибки
     if "NoneType" in str(context.error) and "new_chat_member" in str(context.error):
         return
     
@@ -145,13 +142,11 @@ def main():
     """Точка входа в приложение"""
     logger.info("🤖 Запуск ML Manager Bot...")
     
-    # Выводим конфигурацию
     log_config()
     
     if not BOT_TOKEN:
         raise ValueError("❌ BOT_TOKEN не найден!")
 
-    # Создаём приложение
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_error_handler(error_handler)
     
@@ -161,23 +156,21 @@ def main():
     application.add_handler(ChatMemberHandler(on_chat_member_update))
 
     # ==========================================
-    # 2. Команды (Группа 0 - Высокий приоритет)
+    # 2. Команды
     # ==========================================
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("me", profile_command))
-    application.add_handler(CommandHandler("join", join_menu))
+    # Убрали /join - теперь кнопка в меню
 
     # ==========================================
-    # 3. Групповые хендлеры (Распределение по группам)
+    # 3. Групповые хендлеры
     # ==========================================
     
-    # ГРУППА 1: Реакция на "Кто"
     application.add_handler(
         MessageHandler(filters.ChatType.GROUPS & filters.TEXT & filters.REPLY, who_is_handler),
         group=1
     )
 
-    # ГРУППА 2: Сбор статистики (Фоновый)
     application.add_handler(
         MessageHandler(filters.ChatType.GROUPS, handle_group_message),
         group=2
@@ -190,7 +183,10 @@ def main():
     application.add_handler(CallbackQueryHandler(show_all_players, pattern=f"^{state.CD_MENU_PLAYERS}"))
     application.add_handler(CallbackQueryHandler(reg_menu, pattern=f"^{state.CD_MENU_REG}$"))
     application.add_handler(CallbackQueryHandler(tag_menu, pattern=f"^{state.CD_MENU_TAG}$"))
-    application.add_handler(CallbackQueryHandler(crm_menu, pattern=f"^{state.CD_MENU_CRM}$"))
+    
+    # === ИЗМЕНЕНО: CD_MENU_CRM теперь открывает events_menu (доступно всем) ===
+    application.add_handler(CallbackQueryHandler(events_menu, pattern=f"^{state.CD_MENU_CRM}$"))
+    
     application.add_handler(CallbackQueryHandler(tournament_menu, pattern=f"^{state.CD_MENU_TOURNAMENT}$"))
     application.add_handler(CallbackQueryHandler(settings_menu, pattern=f"^{state.CD_MENU_SETTINGS}$"))
     application.add_handler(CallbackQueryHandler(back_to_menu_handler, pattern=f"^{state.CD_BACK_TO_MENU}$"))
@@ -218,20 +214,25 @@ def main():
     application.add_handler(CallbackQueryHandler(teg_back_handler, pattern=f"^{state.CD_TEG_BACK}$"))
     
     # ==========================================
-    # 7. CRM (Игры и Планирование)
+    # 7. События (Events Callbacks - Refactored)
     # ==========================================
     
-    application.add_handler(CallbackQueryHandler(crm_create_event_start, pattern="^crm_create_event$"))
-    application.add_handler(CallbackQueryHandler(evt_select_day, pattern=r"^evt_day:"))
-    application.add_handler(CallbackQueryHandler(evt_select_hour, pattern=r"^evt_hour:"))
-    application.add_handler(CallbackQueryHandler(evt_select_minute, pattern=r"^evt_min:"))
-    application.add_handler(CallbackQueryHandler(evt_back_day, pattern="^evt_back_day$"))
-    application.add_handler(CallbackQueryHandler(evt_back_hour, pattern="^evt_back_hour$"))
-    application.add_handler(CallbackQueryHandler(evt_cancel, pattern="^cancel_event$"))
-    application.add_handler(CallbackQueryHandler(evt_view_participants, pattern=r"^evt_view:"))
-    application.add_handler(CallbackQueryHandler(evt_delete_event, pattern=r"^evt_del:"))
-    application.add_handler(CallbackQueryHandler(back_to_crm_menu, pattern="^back_to_crm_menu$"))
+    # Просмотр и действия
+    application.add_handler(CallbackQueryHandler(show_event_detail, pattern=r"^evt_detail:"))
     application.add_handler(CallbackQueryHandler(handle_event_action, pattern=r"^event_(join|leave):"))
+    application.add_handler(CallbackQueryHandler(back_to_events_list, pattern="^back_to_evt_list$"))
+    
+    # Создание (Админ)
+    application.add_handler(CallbackQueryHandler(create_event_start, pattern="^crm_create_event$"))
+    application.add_handler(CallbackQueryHandler(select_day, pattern=r"^evt_day:"))
+    application.add_handler(CallbackQueryHandler(select_hour, pattern=r"^evt_hour:"))
+    application.add_handler(CallbackQueryHandler(select_minute, pattern=r"^evt_min:"))
+    application.add_handler(CallbackQueryHandler(back_to_day, pattern="^evt_back_day$"))
+    application.add_handler(CallbackQueryHandler(back_to_hour, pattern="^evt_back_hour$"))
+    application.add_handler(CallbackQueryHandler(cancel_creation, pattern="^cancel_event$"))
+    
+    # Удаление (Админ)
+    application.add_handler(CallbackQueryHandler(delete_event, pattern=r"^evt_del:"))
     
     # ==========================================
     # 8. Микс (Турнир)
@@ -261,12 +262,12 @@ def main():
     # ЗАПУСК
     # ==========================================
     
-    # Запускаем планировщик
+    # Примечание: В scheduler.py нужно обновить импорт функции check_and_notify_events
+    # from events.handlers import check_and_notify_events
     start_scheduler(application)
     
     logger.info("🚀 Бот запущен и готов к работе!")
     
-    # Запускаем поллинг
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

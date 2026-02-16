@@ -20,7 +20,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = update.effective_user
 
-    # Сохраняем/обновляем пользователя в БД
     await save_user(
         user_id=user.id,
         first_name=user.first_name,
@@ -37,7 +36,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отображает главное меню бота"""
     query = update.callback_query
     
-    # Определяем ID пользователя
     if update.effective_user:
         user_id = update.effective_user.id
     elif query:
@@ -63,7 +61,8 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("📝 Регистрация ролей", callback_data=state.CD_MENU_REG)
             ],
             [
-                InlineKeyboardButton("📅 Игры (CRM)", callback_data=state.CD_MENU_CRM),
+                # ИЗМЕНЕНО: Теперь это "События", а не CRM
+                InlineKeyboardButton("📅 События", callback_data=state.CD_MENU_CRM),
                 InlineKeyboardButton("🎲 Микс (Рандом)", callback_data=state.CD_MENU_TOURNAMENT)
             ],
             [
@@ -75,10 +74,12 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # МЕНЮ ОБЫЧНОГО ИГРОКА
         text = (
             "👋 **Добро пожаловать!**\n\n"
-            "Вы можете использовать бота для вызова игроков на матчи по ролям."
+            "Вы можете записываться на игры и вызывать игроков на матчи."
         )
         
         keyboard = [
+            # ИЗМЕНЕНО: Добавлена кнопка событий для всех
+            [InlineKeyboardButton("📅 События", callback_data=state.CD_MENU_CRM)],
             [InlineKeyboardButton("📢 Тегнуть игроков", callback_data=state.CD_MENU_TAG)]
         ]
     
