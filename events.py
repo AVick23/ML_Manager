@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from db import Event, EventParticipant, User, Session
+from db import Event, EventParticipant, User, Session, ROLE_TO_MODEL
 from config import ADMIN_IDS, GROUP_ID, logger
 import state
 
@@ -15,6 +15,9 @@ DATE_FORMAT = "%Y-%m-%d %H:%M"
 
 # Часовой пояс Москвы (UTC+3)
 MSK_TZ = timezone(timedelta(hours=3))
+
+# Размер блока для уведомлений (как в tag_players)
+NOTIFY_CHUNK_SIZE = 4
 
 
 def get_group_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
@@ -41,7 +44,7 @@ def get_group_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
 
 def format_user_mention(user: User) -> str:
     """
-    Форматирует упоминание пользователя.
+    Форматирует упоминание пользователя (для простых списков).
     Если есть username - возвращает @username
     Если нет - возвращает имя или "Игрок"
     
@@ -54,7 +57,6 @@ def format_user_mention(user: User) -> str:
     if user.username:
         return f"@{user.username}"
     elif user.first_name:
-        # Просто имя, без разметки
         return user.first_name
     else:
         return "Игрок"
@@ -570,13 +572,14 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # ==========================================
-# СИСТЕМА УВЕДОМЛЕНИЙ
+# СИСТЕМА УВЕДОМЛЕНИЙ (ИСПРАВЛЕНО)
 # ==========================================
 
 async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
     """
     Функция запускается раз в минуту планировщиком.
     Проверяет наступление событий и отправляет уведомления в группу.
+    Формат уведомлений унифицирован с tag_players.py.
     """
     session = Session()
     
@@ -616,27 +619,69 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
                     continue
                 
                 user_ids = [p.user_id for p in participants]
-                users = session.query(User).filter(User.user_id.in_(user_ids)).all()
                 
-                mentions = [format_user_mention(u) for u in users]
-                tags_text = " ".join(mentions)
+                # 1. Получаем пользователей
+                users = session.query(User).filter(User.user_id.in_(user_ids)).all() if user_ids else []
                 
-                # Отправляем уведомление без разметки
-                if tags_text:
-                    message = (
-                        f"📢 НАЧАЛО ИГРЫ!\n\n"
-                        f"Мероприятие: {ev.title}\n"
-                        f"Время: {ev.event_time}\n\n"
-                        f"Призыв:\n{tags_text}\n\n"
-                        f"Гоу ребята!"
-                    )
+                # 2. Получаем ID ML для этих пользователей из таблиц ролей
+                # Словарь: {user_id: id_ml}
+                user_id_to_ml = {}
+                if user_ids:
+                    for role_model in ROLE_TO_MODEL.values():
+                        # Ищем записи в каждой таблице ролей
+                        role_entries = session.query(role_model).filter(
+                            role_model.user_id.in_(user_ids)
+                        ).all()
+                        for entry in role_entries:
+                            # Если у игрока несколько ролей, берем первый найденный ID ML
+                            if entry.user_id not in user_id_to_ml and entry.id_ml:
+                                user_id_to_ml[entry.user_id] = entry.id_ml
+                
+                # 3. Формируем данные для отправки
+                # Структура: {'user': User, 'id_ml': int/None}
+                notify_data = []
+                for u in users:
+                    ml = user_id_to_ml.get(u.user_id)
+                    notify_data.append({
+                        'user': u, 
+                        'id_ml': ml if ml else "не указан"
+                    })
+                
+                # 4. Разбиваем на части по 4 человека
+                chunks = [notify_data[i:i+NOTIFY_CHUNK_SIZE] for i in range(0, len(notify_data), NOTIFY_CHUNK_SIZE)]
+                
+                for i, chunk in enumerate(chunks):
+                    lines = []
+                    
+                    # Заголовок только в первом сообщении
+                    if i == 0:
+                        lines.append(
+                            f"📢 НАЧАЛО ИГРЫ!\n\n"
+                            f"Мероприятие: {ev.title}\n"
+                            f"Время: {ev.event_time}\n\n"
+                            f"Призыв:"
+                        )
+                    
+                    # Форматирование участников (как в tag_players)
+                    for data in chunk:
+                        u = data['user']
+                        ml = data['id_ml']
+                        # Формируем имя
+                        name = f"@{u.username}" if u.username else (u.first_name or "Игрок")
+                        lines.append(f"• {name} (ID ML: {ml})")
+                    
+                    # Концовка только в первом сообщении
+                    if i == 0:
+                        lines.append("\nГоу ребята!")
+                    
+                    message = "\n".join(lines)
                     
                     await context.bot.send_message(
                         chat_id=group_id, 
                         text=message
                     )
-                    
-                    logger.info(f"📢 Уведомление для игры '{ev.title}' отправлено в группу {group_id}")
+                
+                logger.info(f"📢 Уведомление для игры '{ev.title}' отправлено в группу {group_id}")
                 
                 ev.status = 'Done'
                 

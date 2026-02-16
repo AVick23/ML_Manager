@@ -9,6 +9,8 @@ from db import get_role_users, ROLE_NAMES, ROLE_TO_MODEL, Session
 import state
 
 ITEMS_PER_PAGE = 10
+# Размер блока для тегирования (чтобы не спамить огромными сообщениями)
+TAG_CHUNK_SIZE = 4
 
 
 # ==========================================
@@ -149,11 +151,11 @@ async def teg_single_user_handler(update: Update, context: ContextTypes.DEFAULT_
 
 
 # ==========================================
-# ТЕГ ВСЕХ ИГРОКОВ
+# ТЕГ ВСЕХ ИГРОКОВ (ИСПРАВЛЕНО)
 # ==========================================
 
 async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Тегирование всех игроков роли"""
+    """Тегирование всех игроков роли с одинаковым форматированием"""
     query = update.callback_query
     await query.answer()
 
@@ -173,20 +175,25 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
-    chunks = [users_with_username[i:i+4] for i in range(0, len(users_with_username), 4)]
+    # Разбиваем на части по 4 человека
+    chunks = [users_with_username[i:i+TAG_CHUNK_SIZE] for i in range(0, len(users_with_username), TAG_CHUNK_SIZE)]
 
     try:
         role_name = ROLE_NAMES.get(role_key, "неизвестная роль")
 
         for i, chunk in enumerate(chunks):
+            lines = []
+            
+            # Заголовок добавляем ТОЛЬКО в первое сообщение
             if i == 0:
-                lines = [f"📢 Тег по роли «{role_name}»:\nТы нужен на землях рассвета"]
-                for u in chunk:
-                    id_ml = u.id_ml or "не указан"
-                    lines.append(f"• @{u.username} (ID ML: {id_ml})")
-                message = "\n".join(lines)
-            else:
-                message = " ".join(f"@{u.username}" for u in chunk)
+                lines.append(f"📢 Тег по роли «{role_name}»:\nТы нужен на землях рассвета")
+            
+            # Форматируем каждого игрока в блоке одинаково: с ID ML
+            for u in chunk:
+                id_ml = u.id_ml or "не указан"
+                lines.append(f"• @{u.username} (ID ML: {id_ml})")
+            
+            message = "\n".join(lines)
             
             await context.bot.send_message(chat_id=group_id, text=message)
         
