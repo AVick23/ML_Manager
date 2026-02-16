@@ -1,6 +1,7 @@
 """
 Модуль тегирования (призыва) игроков.
-Интуитивный UX: Список -> Выбор -> Уведомление в группу с указанием инициатора.
+Интуитивный UX: Список -> Выбор -> Уведомление в группу.
+Использует HTML для надежного форматирования.
 """
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -10,7 +11,7 @@ from db import get_role_users, ROLE_NAMES, ROLE_TO_MODEL, Session
 import state
 
 ITEMS_PER_PAGE = 10
-TAG_CHUNK_SIZE = 4  # Человек в одном сообщении, чтобы не спамить
+TAG_CHUNK_SIZE = 4
 
 
 # ==========================================
@@ -33,20 +34,18 @@ async def tag_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # Генерируем кнопки ролей
     buttons = [
         InlineKeyboardButton(name, callback_data=f"{state.CD_TEG_ROLE}:{key}:1")
         for key, name in ROLE_NAMES.items()
     ]
     
-    # Компоновка по 2 в ряд
     keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
     keyboard.append([InlineKeyboardButton("🏠 В главное меню", callback_data=state.CD_BACK_TO_MENU)])
 
     await query.edit_message_text(
-        "📢 *Выберите роль для вызова:*", 
+        "📢 <b>Выберите роль для вызова:</b>", 
         reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 
@@ -77,7 +76,6 @@ async def teg_view_role_handler(update: Update, context: ContextTypes.DEFAULT_TY
     end_index = start_index + ITEMS_PER_PAGE
     page_users = users[start_index:end_index]
 
-    # Кнопки конкретных игроков
     buttons = []
     for u in page_users:
         btn_text = f"@{u.username}" if u.username else (u.first_name or f"ID:{u.user_id}")
@@ -88,12 +86,10 @@ async def teg_view_role_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if buttons:
         keyboard += [buttons[i:i+2] for i in range(0, len(buttons), 2)]
 
-    # Кнопка "Вызвать всех"
     keyboard.append([
         InlineKeyboardButton(f"📣 Вызвать всех ({len(users)})", callback_data=f"{state.CD_TEG_ALL}:{role_key}")
     ])
 
-    # Навигация
     nav_buttons = []
     if page > 1:
         nav_buttons.append(InlineKeyboardButton("⬅️", callback_data=f"{state.CD_TEG_ROLE}:{role_key}:{page-1}"))
@@ -107,9 +103,9 @@ async def teg_view_role_handler(update: Update, context: ContextTypes.DEFAULT_TY
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=state.CD_TEG_BACK)])
 
     await query.edit_message_text(
-        f"👥 *{ROLE_NAMES[role_key]}* (Страница {page}):\nВыберите игрока или вызовите всех:",
+        f"👥 <b>{ROLE_NAMES[role_key]}</b> (Страница {page}):\nВыберите игрока или вызовите всех:",
         reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 
@@ -125,20 +121,15 @@ async def teg_back_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 
 async def teg_single_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Тегирование одного игрока.
-    Инициатор берется из query.from_user.
-    """
+    """Тегирование одного игрока (HTML)"""
     query = update.callback_query
     await query.answer()
 
     _, user_id_str, role_key = query.data.split(":", 2)
     target_user_id = int(user_id_str)
-
-    # 1. Определяем инициатора (того, кто нажал)
+    
     convener = query.from_user
-
-    # 2. Получаем данные цели
+    
     role_model = ROLE_TO_MODEL.get(role_key)
     if not role_model:
         await query.message.reply_text("❌ Ошибка роли.")
@@ -152,46 +143,45 @@ async def teg_single_user_handler(update: Update, context: ContextTypes.DEFAULT_
             await query.message.reply_text("❌ Пользователь не найден.")
             return
 
-        target_mention = f"@{role_user.username}" if role_user.username else role_user.first_name
+        # Формируем упоминание цели
+        if role_user.username:
+            target_link = f"@{role_user.username}"
+        else:
+            # Если нет юзернейма, делаем кликабельную ссылку по ID
+            target_link = f'<a href="tg://user?id={target_user_id}">{role_user.first_name or "Игрок"}</a>'
+            
         id_ml = role_user.id_ml or "не указан"
     finally:
         session.close()
 
-    # 3. Отправка в группу
     group_id = get_group_id(context)
     if not group_id:
         await query.message.reply_text("❌ Не определена группа для отправки.")
         return
 
-    # Формируем красивое сообщение
     text = (
-        f"📢 *ВЫЗОВ ИГРОКА*\n\n"
+        f"📢 <b>ВЫЗОВ ИГРОКА</b>\n\n"
         f"👤 Инициатор: {convener.mention_html()}\n"
-        f"🎯 Цель: {target_mention} (ID ML: {id_ml})\n"
+        f"🎯 Цель: {target_link} (ID ML: {id_ml})\n"
         f"🛡 Роль: {ROLE_NAMES.get(role_key)}\n\n"
         f"⚔️ Требуется на землях рассвета!"
     )
 
     try:
         await context.bot.send_message(chat_id=group_id, text=text, parse_mode="HTML")
-        await query.message.reply_text(f"✅ Вызов для {target_mention} отправлен в группу!")
-        logger.info(f"📢 User {convener.id} теганул {target_user_id} в группе {group_id}")
+        await query.message.reply_text(f"✅ Вызов для {target_link} отправлен в группу!", parse_mode="HTML")
+        logger.info(f"📢 User {convener.id} теганул {target_user_id}")
     except Exception as e:
         logger.error(f"Ошибка отправки тега: {e}")
         await query.message.reply_text(f"❌ Не удалось отправить: {e}")
 
 
 async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Тегирование всех игроков роли.
-    В конце отправляет сообщение с именем того, кто нажал кнопку.
-    """
+    """Тегирование всех игроков роли (HTML)"""
     query = update.callback_query
     await query.answer()
 
     role_key = query.data.split(":", 1)[1]
-    
-    # 1. Определяем инициатора
     convener = query.from_user
 
     users = await get_role_users(role_key)
@@ -206,18 +196,15 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await query.message.reply_text("❌ Не определена группа.")
         return
 
-    # Разбиваем на части
     chunks = [users_with_username[i:i+TAG_CHUNK_SIZE] for i in range(0, len(users_with_username), TAG_CHUNK_SIZE)]
     role_name = ROLE_NAMES.get(role_key, "Роль")
 
     try:
-        # Отправляем списки игроков
         for i, chunk in enumerate(chunks):
             lines = []
             
-            # Заголовок только в первом сообщении
             if i == 0:
-                lines.append(f"📢 *МАССОВЫЙ ВЫЗОВ* 📢\n🛡 Роль: *{role_name}*\n")
+                lines.append(f"📢 <b>МАССОВЫЙ ВЫЗОВ</b> 📢\n🛡 Роль: <b>{role_name}</b>\n")
 
             for u in chunk:
                 id_ml = u.id_ml or "нет"
@@ -226,12 +213,12 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
             await context.bot.send_message(
                 chat_id=group_id, 
                 text="\n".join(lines), 
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
 
-        # === ФИНАЛЬНОЕ СООБЩЕНИЕ С ИНИЦИАТОРОМ ===
+        # Финальное сообщение
         final_text = (
-            f"👑 *ВЫЗОВ ЗАВЕРШЕН*\n\n"
+            f"👑 <b>ВЫЗОВ ЗАВЕРШЕН</b>\n\n"
             f"🙋‍♂️ Всех созывал: {convener.mention_html()}\n"
             f"⚡️ Всего игроков: {len(users_with_username)}\n\n"
             f"⚔️ Ждем на землях рассвета!"
@@ -243,8 +230,8 @@ async def teg_all_users_handler(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="HTML"
         )
 
-        await query.message.reply_text(f"✅ Массовый вызов роли *{role_name}* выполнен!", parse_mode="Markdown")
-        logger.info(f"📢 User {convener.id} вызвал всех {role_name} в группе {group_id}")
+        await query.message.reply_text(f"✅ Массовый вызов роли <b>{role_name}</b> выполнен!", parse_mode="HTML")
+        logger.info(f"📢 User {convener.id} вызвал всех {role_name}")
 
     except Exception as e:
         logger.error(f"Ошибка массового тега: {e}")

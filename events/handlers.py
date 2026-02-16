@@ -1,11 +1,12 @@
 """
 handlers.py
-Обработчики команды и callback-запросов для событий.
+Обработчики событий. Используют HTML-форматирование.
 """
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # ДОБАВЛЕН ИМПОРТ КНОПОК
+import html # Для экранирования текста
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from db import Session, Event, EventParticipant, User  # ДОБАВЛЕН ИМПОРТ User
+from db import Session, Event, EventParticipant, User
 from config import ADMIN_IDS, logger
 import state
 
@@ -21,15 +22,10 @@ from events.keyboards import (
 from datetime import datetime, timedelta
 
 # ==========================================
-# ГЛАВНОЕ МЕНЮ СОБЫТИЙ (Entry Point)
+# ГЛАВНОЕ МЕНЮ СОБЫТИЙ
 # ==========================================
 
 async def events_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Единая точка входа.
-    Показывает список игр всем пользователям.
-    Админы видят кнопку создания.
-    """
     query = update.callback_query
     
     if query:
@@ -45,26 +41,25 @@ async def events_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         events = get_upcoming_events(session)
         
         if not events:
-            text = "🗓 *Расписание пусто*\n\nНет запланированных игр. Время отдыхать!"
+            text = "🗓 <b>Расписание пусто</b>\n\nНет запланированных игр. Время отдыхать!"
         else:
-            text = "🗓 *Расписание игр*\nВыберите событие для деталей:"
+            text = "🗓 <b>Расписание игр</b>\nВыберите событие для деталей:"
         
         reply_markup = get_events_list_kb(events, is_admin)
         
         if query:
-            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
         else:
-            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
             
     finally:
         session.close()
 
 # ==========================================
-# ПРОСМОТР И ДЕЙСТВИЯ (ЗАПИСЬ/ОТПИСКА)
+# ПРОСМОТР И ДЕЙСТВИЯ
 # ==========================================
 
 async def show_event_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Карточка события: время, участники, кнопки действий"""
     query = update.callback_query
     await query.answer()
     
@@ -78,29 +73,26 @@ async def show_event_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not event:
             return await query.edit_message_text("❌ Событие не найдено или удалено.")
 
-        # Данные
         ev_time = datetime.strptime(event.event_time, DATE_FORMAT)
         time_str = ev_time.strftime("%d %b %Y, %H:%M")
         participants = get_event_participants(session, event_id)
-        
-        # Проверка статуса пользователя
         is_joined = is_user_participant(session, event_id, user_id)
         
-        # --- Формирование текста ---
+        # Экранируем название события
+        safe_title = html.escape(event.title)
+        
         lines = [
-            f"🎯 *{event.title}*",
-            f"🕒 *Время:* {time_str} (МСК)",
+            f"🎯 <b>{safe_title}</b>",
+            f"🕒 <b>Время:</b> {time_str} (МСК)",
             f"\n-------------------"
         ]
 
         if not participants:
-            lines.append("\n👻 *Участников пока нет*\nСтаньте первым!")
+            lines.append("\n👻 <b>Участников пока нет</b>\nСтаньте первым!")
         else:
-            lines.append(f"\n👥 *Участники ({len(participants)}):*")
+            lines.append(f"\n👥 <b>Участники ({len(participants)}):</b>")
             
-            # Собираем имена
             p_user_ids = [p.user_id for p in participants]
-            # Используем импортированный User
             users = session.query(User).filter(User.user_id.in_(p_user_ids)).all() if p_user_ids else []
             user_map = {u.user_id: u for u in users}
             
@@ -113,14 +105,13 @@ async def show_event_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "\n".join(lines),
             reply_markup=reply_markup,
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
         
     finally:
         session.close()
 
 async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка записи/отписки"""
     query = update.callback_query
     await query.answer()
     
@@ -158,7 +149,6 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         session.commit()
         
-        # Обновляем сообщение
         query.data = f"evt_detail:{event_id}"
         await show_event_detail(update, context)
         
@@ -170,11 +160,10 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
         session.close()
 
 # ==========================================
-# АДМИНСКАЯ ЧАСТЬ: СОЗДАНИЕ
+# СОЗДАНИЕ (АДМИН)
 # ==========================================
 
 async def create_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Шаг 1: Ввод названия (Только админ)"""
     query = update.callback_query
     if query: await query.answer()
     
@@ -184,16 +173,15 @@ async def create_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     context.user_data["crm_state"] = "awaiting_title"
     
-    text = "📝 *Создание игры*\n\nВведите название события:"
+    text = "📝 <b>Создание игры</b>\n\nВведите название события:"
     keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_event")]]
     
     if query:
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка текстового ввода названия"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         return
@@ -210,19 +198,20 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await ask_date(update, context)
 
 async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Шаг 2: Выбор даты"""
     query = update.callback_query
     if query: await query.answer()
 
     title = context.user_data.get('event_title', 'Игра')
-    text = f"📅 *{title}*\n\nВыберите дату:"
+    # Экранируем
+    safe_title = html.escape(title)
+    text = f"📅 <b>{safe_title}</b>\n\nВыберите дату:"
     
     reply_markup = get_create_date_kb()
 
     if query:
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
     else:
-        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
 async def select_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -254,7 +243,6 @@ async def ask_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, reply_markup=get_create_minute_kb(h))
 
 async def select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Финал: Создание события в БД"""
     query = update.callback_query
     await query.answer()
     
@@ -288,27 +276,28 @@ async def select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     group_id = get_group_id(context)
     if group_id:
         try:
+            safe_title = html.escape(title)
             notify_text = (
-                f"📢 *НОВАЯ ИГРА!*\n\n"
-                f"🎯 {title}\n"
+                f"📢 <b>НОВАЯ ИГРА!</b>\n\n"
+                f"🎯 {safe_title}\n"
                 f"🗓 {event_time_str} (МСК)\n\n"
                 f"Откройте бота, чтобы записаться!"
             )
-            await context.bot.send_message(chat_id=group_id, text=notify_text, parse_mode="Markdown")
+            await context.bot.send_message(chat_id=group_id, text=notify_text, parse_mode="HTML")
         except Exception as e:
             logger.warning(f"Notify error: {e}")
     
     context.user_data.clear()
     
-    await query.message.reply_text(f"✅ Игра *{title}* создана!", parse_mode="Markdown")
+    safe_title = html.escape(title)
+    await query.message.reply_text(f"✅ Игра <b>{safe_title}</b> создана!", parse_mode="HTML")
     await events_menu(update, context)
 
 # ==========================================
-# АДМИНСКАЯ ЧАСТЬ: УДАЛЕНИЕ И ОТМЕНА
+# УДАЛЕНИЕ И ОТМЕНА
 # ==========================================
 
 async def delete_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удаление события"""
     query = update.callback_query
     await query.answer()
     
@@ -355,11 +344,10 @@ async def back_to_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await ask_hour(update, context)
 
 # ==========================================
-# ПЛАНИРОВЩИК (Уведомления)
+# ПЛАНИРОВЩИК
 # ==========================================
 
 async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
-    """Умные уведомления о начале игры"""
     session = Session()
     try:
         now_msk = datetime.now(MSK_TZ)
@@ -380,13 +368,13 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
         for ev in events:
             participants = get_event_participants(session, ev.id)
             user_ids = [p.user_id for p in participants]
-            # Используем импортированный User
             users = session.query(User).filter(User.user_id.in_(user_ids)).all() if user_ids else []
             
             notify_blocks = []
+            safe_title = html.escape(ev.title)
             header = (
-                f"📢 *ИГРА НАЧИНАЕТСЯ!*\n"
-                f"🎯 {ev.title}\n\n"
+                f"📢 <b>ИГРА НАЧИНАЕТСЯ!</b>\n"
+                f"🎯 {safe_title}\n\n"
                 f"⚔️ Призыв игроков:"
             )
             
@@ -401,7 +389,7 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
                 notify_blocks.append("\n".join(lines))
             
             for block in notify_blocks:
-                await context.bot.send_message(chat_id=group_id, text=block, parse_mode="Markdown")
+                await context.bot.send_message(chat_id=group_id, text=block, parse_mode="HTML")
             
             ev.status = 'Done'
         

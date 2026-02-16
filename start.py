@@ -1,5 +1,5 @@
 """
-Модуль стартового меню и главной страницы бота.
+Модуль стартового меню.
 """
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -10,10 +10,9 @@ import state
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start"""
     if update.effective_chat.type != "private":
         await update.message.reply_text(
-            "❌ Эта команда доступна только в личных сообщениях с ботом."
+            "❌ Эта команда доступна только в личных сообщениях."
         )
         return
     
@@ -33,7 +32,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отображает главное меню бота"""
     query = update.callback_query
     
     if update.effective_user:
@@ -45,15 +43,10 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     is_admin = user_id in ADMIN_IDS
     
-    text = ""
     keyboard = []
 
     if is_admin:
-        # МЕНЮ АДМИНА
-        text = (
-            "🛠 **Панель Администратора**\n\n"
-            "У вас есть полный доступ к управлению."
-        )
+        text = "🛠 <b>Панель Администратора</b>\n\nУ вас есть полный доступ к управлению."
         
         keyboard = [
             [
@@ -61,9 +54,8 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("📝 Регистрация ролей", callback_data=state.CD_MENU_REG)
             ],
             [
-                # ИЗМЕНЕНО: Теперь это "События", а не CRM
                 InlineKeyboardButton("📅 События", callback_data=state.CD_MENU_CRM),
-                InlineKeyboardButton("🎲 Микс (Рандом)", callback_data=state.CD_MENU_TOURNAMENT)
+                InlineKeyboardButton("🎲 Микс", callback_data=state.CD_MENU_TOURNAMENT)
             ],
             [
                 InlineKeyboardButton("📢 Тегнуть игроков", callback_data=state.CD_MENU_TAG),
@@ -71,14 +63,9 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ]
     else:
-        # МЕНЮ ОБЫЧНОГО ИГРОКА
-        text = (
-            "👋 **Добро пожаловать!**\n\n"
-            "Вы можете записываться на игры и вызывать игроков на матчи."
-        )
+        text = "👋 <b>Добро пожаловать!</b>\n\nВы можете записываться на игры и вызывать игроков."
         
         keyboard = [
-            # ИЗМЕНЕНО: Добавлена кнопка событий для всех
             [InlineKeyboardButton("📅 События", callback_data=state.CD_MENU_CRM)],
             [InlineKeyboardButton("📢 Тегнуть игроков", callback_data=state.CD_MENU_TAG)]
         ]
@@ -87,15 +74,14 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if query:
-            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
         else:
-            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
     except Exception as e:
         logger.debug(f"Не удалось обновить меню: {e}")
 
 
 async def back_to_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик возврата в главное меню"""
     query = update.callback_query
     if query:
         await query.answer()
