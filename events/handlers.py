@@ -21,6 +21,20 @@ from events.keyboards import (
     get_create_date_kb, get_create_hour_kb, get_create_minute_kb
 )
 
+
+# ==========================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ФОРМАТИРОВАНИЯ
+# ==========================================
+
+def format_user_mention_from_tg(tg_user):
+    """Создает упоминание пользователя из объекта Telegram User"""
+    name = html.escape(tg_user.first_name)
+    if tg_user.username:
+        return f"@{tg_user.username}"
+    else:
+        return f"<a href='tg://user?id={tg_user.id}'>{name}</a>"
+
+
 # ==========================================
 # ГЛАВНОЕ МЕНЮ СОБЫТИЙ
 # ==========================================
@@ -138,25 +152,30 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
             session.add(EventParticipant(event_id=event_id, user_id=user_id))
             await save_user_from_tg(query.from_user)
 
+            # Получаем актуальное количество участников после добавления
+            participants_count = session.query(EventParticipant).filter_by(event_id=event_id).count()
             logger.info(f"✅ User {user_id} joined event {event_id}")
-            await query.answer("✅ Вы успешно записались!")
+            await query.answer(f"✅ Вы записаны! Всего участников: {participants_count}")
 
-            # Отправляем уведомление в группу
+            # Уведомление в группу
             await notify_group_about_join(context, event, query.from_user)
 
         elif action == "event_leave":
             if existing:
                 session.delete(existing)
+                # Получаем актуальное количество участников после удаления
+                participants_count = session.query(EventParticipant).filter_by(event_id=event_id).count()
                 logger.info(f"❌ User {user_id} left event {event_id}")
-                await query.answer("❌ Вы отписались.")
+                await query.answer(f"❌ Вы отписались. Осталось участников: {participants_count}")
 
-                # Отправляем уведомление в группу
+                # Уведомление в группу
                 await notify_group_about_leave(context, event, query.from_user)
             else:
                 return await query.answer("Вы не были записаны.")
 
         session.commit()
 
+        # Обновляем сообщение с деталями события
         query.data = f"evt_detail:{event_id}"
         await show_event_detail(update, context)
 
@@ -175,13 +194,21 @@ async def notify_group_about_join(context, event, tg_user):
         return
 
     safe_title = html.escape(event.title)
-    mention = f"@{tg_user.username}" if tg_user.username else f'<a href="tg://user?id={tg_user.id}">{html.escape(tg_user.first_name)}</a>'
+    mention = format_user_mention_from_tg(tg_user)
+
+    # Получаем текущее количество участников
+    session = Session()
+    try:
+        participants_count = session.query(EventParticipant).filter_by(event_id=event.id).count()
+    finally:
+        session.close()
 
     text = (
         f"📢 <b>НОВЫЙ УЧАСТНИК!</b>\n\n"
         f"{mention} записался(лась) на игру\n"
         f"🎯 <b>{safe_title}</b>\n"
-        f"🕒 {event.event_time} (МСК)"
+        f"🕒 {event.event_time} (МСК)\n"
+        f"👥 Теперь участников: {participants_count}"
     )
 
     try:
@@ -197,12 +224,20 @@ async def notify_group_about_leave(context, event, tg_user):
         return
 
     safe_title = html.escape(event.title)
-    mention = f"@{tg_user.username}" if tg_user.username else f'<a href="tg://user?id={tg_user.id}">{html.escape(tg_user.first_name)}</a>'
+    mention = format_user_mention_from_tg(tg_user)
+
+    # Получаем текущее количество участников
+    session = Session()
+    try:
+        participants_count = session.query(EventParticipant).filter_by(event_id=event.id).count()
+    finally:
+        session.close()
 
     text = (
         f"👋 <b>УЧАСТНИК ОТПИСАЛСЯ</b>\n\n"
         f"{mention} отписался(лась) от игры\n"
-        f"🎯 <b>{safe_title}</b>"
+        f"🎯 <b>{safe_title}</b>\n"
+        f"👥 Осталось участников: {participants_count}"
     )
 
     try:
@@ -590,10 +625,29 @@ async def delete_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         event = get_event_by_id(session, event_id)
         if event:
+            # Получаем название для уведомления
+            event_title = event.title
+            safe_title = html.escape(event_title)
+
+            # Удаляем участников и само событие
             session.query(EventParticipant).filter_by(event_id=event_id).delete()
             session.delete(event)
             session.commit()
             await query.answer("Игра удалена.")
+
+            # Уведомление в группу об удалении
+            group_id = get_group_id(context)
+            if group_id:
+                try:
+                    group_text = (
+                        f"🗑 <b>Игра отменена</b>\n\n"
+                        f"🎯 {safe_title}\n"
+                        f"Игра была удалена администратором."
+                    )
+                    await context.bot.send_message(chat_id=group_id, text=group_text, parse_mode="HTML")
+                except Exception as e:
+                    logger.warning(f"Group notification error (delete): {e}")
+
     except Exception as e:
         session.rollback()
         logger.error(f"Del error: {e}")
