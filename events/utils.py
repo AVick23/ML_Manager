@@ -26,7 +26,6 @@ def format_user_mention(user: User) -> str:
     if user.username:
         return f"<a href='tg://resolve?domain={user.username}'>{name}</a>"
     else:
-        # Упоминание по ID работает только если юзер писал боту в ЛС
         return f"<a href='tg://user?id={user.user_id}'>{name}</a>"
 
 async def save_user_from_tg(tg_user: TgUser):
@@ -42,8 +41,9 @@ def get_event_by_id(session, event_id: int) -> Event | None:
     return session.query(Event).get(event_id)
 
 def get_upcoming_events(session) -> list[Event]:
+    # Возвращаем все незавершённые события (статус не 'completed')
     return session.query(Event).filter(
-        Event.status == 'Scheduled'
+        Event.status != 'completed'
     ).order_by(Event.event_time).all()
 
 def get_event_participants(session, event_id: int):
@@ -53,3 +53,11 @@ def is_user_participant(session, event_id: int, user_id: int) -> bool:
     return session.query(EventParticipant).filter_by(
         event_id=event_id, user_id=user_id
     ).first() is not None
+
+def get_user_role(session, user_id: int) -> str | None:
+    """Возвращает ключ роли пользователя (middle, gold, ...) или None"""
+    from db import ROLE_TO_MODEL
+    for role_key, model in ROLE_TO_MODEL.items():
+        if session.query(model).filter_by(user_id=user_id).first():
+            return role_key
+    return None

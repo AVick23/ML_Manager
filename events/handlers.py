@@ -2,19 +2,25 @@
 handlers.py
 Обработчики событий. Используют HTML-форматирование.
 """
-import html  # Для экранирования текста
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+import html
+import random
 from datetime import datetime, timedelta
 
-from db import Session, Event, EventParticipant, User
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+
+from db import (
+    Session, Event, EventParticipant, User,
+    EventMatch, MatchParticipant, RoleRating,
+    ROLE_TO_MODEL, ROLE_LIST
+)
 from config import ADMIN_IDS, logger
 import state
 
 from events.utils import (
     get_group_id, save_user_from_tg, get_event_by_id,
     get_upcoming_events, get_event_participants, is_user_participant,
-    format_user_mention, DATE_FORMAT, MSK_TZ
+    format_user_mention, DATE_FORMAT, MSK_TZ, get_user_role
 )
 from events.keyboards import (
     get_events_list_kb, get_event_detail_kb,
@@ -94,6 +100,9 @@ async def show_event_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         participants = get_event_participants(session, event_id)
         is_joined = is_user_participant(session, event_id, user_id)
 
+        # Проверяем, есть ли уже зафиксированный состав
+        has_lineup = session.query(EventMatch).filter_by(event_id=event_id).first() is not None
+
         # Экранируем название события
         safe_title = html.escape(event.title)
 
@@ -116,7 +125,7 @@ async def show_event_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 u = user_map.get(p.user_id)
                 lines.append(f"{i}. {format_user_mention(u)}")
 
-        reply_markup = get_event_detail_kb(event_id, is_joined, is_admin)
+        reply_markup = get_event_detail_kb(event_id, is_joined, is_admin, event.status, has_lineup)
 
         await query.edit_message_text(
             "\n".join(lines),
@@ -144,6 +153,10 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
         if not event:
             return await query.answer("Событие было удалено.", show_alert=True)
 
+        # Нельзя записываться/отписываться, если ивент завершён
+        if event.status == 'completed':
+            return await query.answer("Ивент уже завершён.", show_alert=True)
+
         existing = session.query(EventParticipant).filter_by(
             event_id=event_id, user_id=user_id
         ).first()
@@ -158,41 +171,31 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
             session.add(EventParticipant(event_id=event_id, user_id=user_id))
             await save_user_from_tg(tg_user)
 
-            # Получаем актуальное количество участников после добавления
             participants_count = session.query(EventParticipant).filter_by(event_id=event_id).count()
             logger.info(f"✅ User {user_id} joined event {event_id}")
-            
-            # Отправляем личное сообщение пользователю
+
             await send_private_confirmation(context, tg_user, event, "join", participants_count)
-            
-            # Уведомление в группу
             await notify_group_about_join(context, event, tg_user)
-            
+
             action_text = f"✅ Вы записаны! Всего участников: {participants_count}"
 
         elif action == "event_leave":
             if existing:
                 session.delete(existing)
-                # Получаем актуальное количество участников после удаления
                 participants_count = session.query(EventParticipant).filter_by(event_id=event_id).count()
                 logger.info(f"❌ User {user_id} left event {event_id}")
-                
-                # Отправляем личное сообщение пользователю
+
                 await send_private_confirmation(context, tg_user, event, "leave", participants_count)
-                
-                # Уведомление в группу
                 await notify_group_about_leave(context, event, tg_user)
-                
+
                 action_text = f"❌ Вы отписались. Осталось участников: {participants_count}"
             else:
                 return await query.answer("Вы не были записаны.")
 
         session.commit()
-
-        # Показываем всплывающее уведомление
         await query.answer(action_text)
 
-        # Обновляем сообщение с деталями события
+        # Обновляем карточку
         query.data = f"evt_detail:{event_id}"
         await show_event_detail(update, context)
 
@@ -207,8 +210,7 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def send_private_confirmation(context, tg_user, event, action, participants_count):
     """Отправляет подтверждение пользователю в личные сообщения"""
     safe_title = html.escape(event.title)
-    mention = format_user_mention_from_tg(tg_user)
-    
+
     if action == "join":
         text = (
             f"✅ <b>Вы успешно записались на игру!</b>\n\n"
@@ -218,7 +220,7 @@ async def send_private_confirmation(context, tg_user, event, action, participant
             f"📢 Уведомление о начале игры придёт в группу.\n"
             f"Удачной игры! ⚔️"
         )
-    else:  # leave
+    else:
         text = (
             f"❌ <b>Вы отписались от игры</b>\n\n"
             f"🎯 {safe_title}\n"
@@ -226,20 +228,15 @@ async def send_private_confirmation(context, tg_user, event, action, participant
             f"👥 Осталось участников: {participants_count}\n\n"
             f"Жаль, что не получится сыграть. В следующий раз обязательно присоединяйтесь! 👋"
         )
-    
+
     try:
-        await context.bot.send_message(
-            chat_id=tg_user.id,
-            text=text,
-            parse_mode="HTML"
-        )
+        await context.bot.send_message(chat_id=tg_user.id, text=text, parse_mode="HTML")
         logger.info(f"📨 Private confirmation sent to {tg_user.id} for {action}")
     except Exception as e:
         logger.warning(f"Failed to send private confirmation to {tg_user.id}: {e}")
 
 
 async def notify_group_about_join(context, event, tg_user):
-    """Отправляет уведомление в группу о записи на игру"""
     group_id = get_group_id(context)
     if not group_id:
         return
@@ -247,7 +244,6 @@ async def notify_group_about_join(context, event, tg_user):
     safe_title = html.escape(event.title)
     mention = format_user_mention_from_tg(tg_user)
 
-    # Получаем текущее количество участников
     session = Session()
     try:
         participants_count = session.query(EventParticipant).filter_by(event_id=event.id).count()
@@ -261,7 +257,6 @@ async def notify_group_about_join(context, event, tg_user):
         f"🕒 {event.event_time} (МСК)\n"
         f"👥 Теперь участников: {participants_count}"
     )
-
     try:
         await context.bot.send_message(chat_id=group_id, text=text, parse_mode="HTML")
     except Exception as e:
@@ -269,7 +264,6 @@ async def notify_group_about_join(context, event, tg_user):
 
 
 async def notify_group_about_leave(context, event, tg_user):
-    """Отправляет уведомление в группу об отписке от игры"""
     group_id = get_group_id(context)
     if not group_id:
         return
@@ -277,7 +271,6 @@ async def notify_group_about_leave(context, event, tg_user):
     safe_title = html.escape(event.title)
     mention = format_user_mention_from_tg(tg_user)
 
-    # Получаем текущее количество участников
     session = Session()
     try:
         participants_count = session.query(EventParticipant).filter_by(event_id=event.id).count()
@@ -290,7 +283,6 @@ async def notify_group_about_leave(context, event, tg_user):
         f"🎯 <b>{safe_title}</b>\n"
         f"👥 Осталось участников: {participants_count}"
     )
-
     try:
         await context.bot.send_message(chat_id=group_id, text=text, parse_mode="HTML")
     except Exception as e:
@@ -314,7 +306,7 @@ async def create_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return await update.message.reply_text("🔒 Только админы могут создавать игры.")
 
     context.user_data["crm_state"] = "awaiting_title"
-    context.user_data.pop("editing_event_id", None)  # Очищаем режим редактирования
+    context.user_data.pop("editing_event_id", None)
 
     text = "📝 <b>Создание игры</b>\n\nВведите название события:"
     keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_event")]]
@@ -343,7 +335,6 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _render_date_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, title: str):
-    """Отрисовывает выбор даты (без ответа на callback)"""
     safe_title = html.escape(title)
     text = f"📅 <b>{safe_title}</b>\n\nВыберите дату:"
     reply_markup = get_create_date_kb()
@@ -425,7 +416,6 @@ async def select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.commit()
             safe_title = html.escape(event.title)
 
-            # Сообщение админу
             await query.edit_message_text(
                 f"✅ <b>Время события изменено</b>\n\n"
                 f"🎯 {safe_title}\n"
@@ -438,7 +428,6 @@ async def select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             logger.info(f"✏️ Admin {query.from_user.id} changed event {editing_event_id} time: {old_time} -> {event_time_str}")
 
-            # Уведомление в группу об изменении времени
             group_id = get_group_id(context)
             if group_id:
                 try:
@@ -457,7 +446,7 @@ async def select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         else:
             # Создание нового события
-            new_event = Event(title=title, event_time=event_time_str)
+            new_event = Event(title=title, event_time=event_time_str, status='active')
             session.add(new_event)
             session.commit()
             event_id = new_event.id
@@ -469,7 +458,6 @@ async def select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
 
-    # Если создание — отправляем уведомление в группу
     group_id = get_group_id(context)
     if group_id:
         try:
@@ -485,7 +473,6 @@ async def select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Notify error: {e}")
 
     context.user_data.clear()
-
     safe_title = html.escape(title)
     await query.message.reply_text(f"✅ Игра <b>{safe_title}</b> создана!", parse_mode="HTML")
     await events_menu(update, context)
@@ -496,7 +483,6 @@ async def select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 
 async def edit_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Вход в меню редактирования события"""
     query = update.callback_query
     await query.answer()
     if query.from_user.id not in ADMIN_IDS:
@@ -525,7 +511,6 @@ async def edit_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def edit_title_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Запрос нового названия"""
     query = update.callback_query
     await query.answer()
     event_id = context.user_data.get("editing_event_id")
@@ -550,7 +535,6 @@ async def edit_title_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def edit_time_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Запуск выбора новой даты/времени"""
     query = update.callback_query
     await query.answer()
     event_id = context.user_data.get("editing_event_id")
@@ -568,17 +552,14 @@ async def edit_time_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Событие не найдено.")
             return
         title = event.title
-        # Сохраняем название в user_data, чтобы оно было доступно в select_minute
         context.user_data["event_title"] = title
     finally:
         session.close()
 
-    # Показываем календарь без повторного answer
     await _render_date_selection(update, context, title)
 
 
 async def receive_edited_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка введённого нового названия"""
     if context.user_data.get("state") != "EDITING_TITLE":
         return
     user_id = update.effective_user.id
@@ -609,7 +590,6 @@ async def receive_edited_title(update: Update, context: ContextTypes.DEFAULT_TYP
         safe_new = html.escape(new_title)
         old_title_safe = html.escape(old_title)
 
-        # Сообщение админу
         await update.message.reply_text(
             f"✅ <b>Название изменено</b>\n\n"
             f"Старое: {old_title_safe}\n"
@@ -621,7 +601,6 @@ async def receive_edited_title(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         logger.info(f"✏️ Admin {user_id} renamed event {event_id}: '{old_title}' -> '{new_title}'")
 
-        # Уведомление в группу об изменении названия
         group_id = get_group_id(context)
         if group_id:
             try:
@@ -646,13 +625,11 @@ async def receive_edited_title(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена редактирования названия"""
     query = update.callback_query
     await query.answer()
     event_id = context.user_data.get("editing_event_id")
     context.user_data.clear()
     if event_id:
-        # Вернуться к деталям события
         query.data = f"evt_detail:{event_id}"
         await show_event_detail(update, context)
     else:
@@ -676,17 +653,20 @@ async def delete_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         event = get_event_by_id(session, event_id)
         if event:
-            # Получаем название для уведомления
             event_title = event.title
             safe_title = html.escape(event_title)
 
-            # Удаляем участников и само событие
+            # Удаляем всё связанное
             session.query(EventParticipant).filter_by(event_id=event_id).delete()
+            # Удаляем матчи и их участников (каскадно? но проще почистить отдельно)
+            matches = session.query(EventMatch).filter_by(event_id=event_id).all()
+            for m in matches:
+                session.query(MatchParticipant).filter_by(match_id=m.id).delete()
+                session.delete(m)
             session.delete(event)
             session.commit()
             await query.answer("Игра удалена.")
 
-            # Уведомление в группу об удалении
             group_id = get_group_id(context)
             if group_id:
                 try:
@@ -735,6 +715,497 @@ async def back_to_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ==========================================
+# УМНЫЙ МИКС (с учётом ролей)
+# ==========================================
+
+async def smart_mix(users, session):
+    """
+    Распределяет участников по командам, стараясь учесть их роли.
+    Возвращает словарь: {'red': [...], 'blue': [...], 'spectators': [...]}
+    """
+    if len(users) < 2:
+        return {'red': [], 'blue': [], 'spectators': []}
+
+    # Получаем роли пользователей
+    user_roles = {}
+    for u in users:
+        role = get_user_role(session, u.user_id)
+        if role:
+            user_roles[u.user_id] = role
+
+    # Группируем игроков по ролям
+    role_buckets = {role: [] for role in ROLE_LIST}
+    no_role = []
+    for u in users:
+        role = user_roles.get(u.user_id)
+        if role and role in role_buckets:
+            role_buckets[role].append(u)
+        else:
+            no_role.append(u)
+
+    # Перемешиваем каждую группу
+    for role in role_buckets:
+        random.shuffle(role_buckets[role])
+    random.shuffle(no_role)
+
+    red = []
+    blue = []
+    # Распределяем по ролям: по одному в каждую команду, чередуя
+    # Для каждой роли по очереди добавляем игроков в red и blue
+    # Пока есть игроки в role_buckets[role]
+    # Но чтобы не создавать дисбаланс, будем заполнять по кругу
+    # Сначала соберём всех игроков с ролями в общий список с пометкой роли
+    players_with_roles = []
+    for role in ROLE_LIST:
+        for player in role_buckets[role]:
+            players_with_roles.append((role, player))
+
+    # Перемешаем этот список, чтобы разнообразить порядок
+    random.shuffle(players_with_roles)
+
+    # Теперь распределяем по командам, стараясь сохранить баланс ролей
+    # Для простоты будем просто по очереди добавлять в red и blue
+    for i, (role, player) in enumerate(players_with_roles):
+        if i % 2 == 0:
+            if len(red) < 5:
+                red.append(player)
+            else:
+                blue.append(player)
+        else:
+            if len(blue) < 5:
+                blue.append(player)
+            else:
+                red.append(player)
+
+    # Теперь заполняем оставшиеся места случайными игроками без роли
+    for player in no_role:
+        if len(red) < 5:
+            red.append(player)
+        elif len(blue) < 5:
+            blue.append(player)
+        else:
+            break
+
+    # Если после заполнения остались игроки (больше 10), они становятся зрителями
+    in_teams = set(red + blue)
+    spectators = [u for u in users if u not in in_teams]
+
+    return {'red': red[:5], 'blue': blue[:5], 'spectators': spectators}
+
+
+def format_mix_result(event_title, mix_result):
+    """Форматирует результат микса в HTML"""
+    lines = [f"🎯 <b>{html.escape(event_title)}</b>\n"]
+
+    if mix_result['red']:
+        lines.append("\n🔴 <b>КОМАНДА RED</b>")
+        for u in mix_result['red']:
+            name = f"@{u.username}" if u.username else u.first_name
+            lines.append(f"• {html.escape(name)}")
+
+    if mix_result['blue']:
+        lines.append("\n🔵 <b>КОМАНДА BLUE</b>")
+        for u in mix_result['blue']:
+            name = f"@{u.username}" if u.username else u.first_name
+            lines.append(f"• {html.escape(name)}")
+
+    if mix_result['spectators']:
+        lines.append("\n👀 <b>ЗРИТЕЛИ</b>")
+        for u in mix_result['spectators']:
+            name = f"@{u.username}" if u.username else u.first_name
+            lines.append(f"• {html.escape(name)}")
+
+    return "\n".join(lines)
+
+
+async def event_mix(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запуск умного микса"""
+    query = update.callback_query
+    await query.answer()
+    event_id = int(query.data.split(':')[1])
+
+    session = Session()
+    try:
+        event = get_event_by_id(session, event_id)
+        if not event:
+            await query.edit_message_text("❌ Событие не найдено.")
+            return
+
+        # Проверяем, что событие активно и нет зафиксированного состава
+        if event.status != 'active':
+            await query.answer("Микс доступен только для активных событий.", show_alert=True)
+            return
+
+        has_lineup = session.query(EventMatch).filter_by(event_id=event_id).first() is not None
+        if has_lineup:
+            await query.answer("Состав уже зафиксирован. Нельзя перемешать.", show_alert=True)
+            return
+
+        participants = get_event_participants(session, event_id)
+        user_ids = [p.user_id for p in participants]
+        users = session.query(User).filter(User.user_id.in_(user_ids)).all()
+
+        if len(users) < 2:
+            await query.answer("❌ Слишком мало участников для микса (нужно хотя бы 2).", show_alert=True)
+            return
+
+        # Сохраняем в user_data для повторного микса
+        context.user_data['mix_users'] = [u.user_id for u in users]
+        context.user_data['mix_event_id'] = event_id
+
+        mix_result = await smart_mix(users, session)
+        text = format_mix_result(event.title, mix_result)
+
+        keyboard = [
+            [InlineKeyboardButton("🔄 Перемешать ещё", callback_data=f"event_mix_again:{event_id}")],
+            [InlineKeyboardButton("✅ Зафиксировать состав", callback_data=f"event_fix_lineup:{event_id}")],
+            [InlineKeyboardButton("❌ Отмена", callback_data=f"evt_detail:{event_id}")]
+        ]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+    except Exception as e:
+        logger.error(f"Event mix error: {e}")
+        await query.answer("❌ Ошибка при выполнении микса.", show_alert=True)
+    finally:
+        session.close()
+
+
+async def event_mix_again(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Повторный микс"""
+    query = update.callback_query
+    await query.answer()
+    event_id = int(query.data.split(':')[1])
+
+    if context.user_data.get('mix_event_id') != event_id:
+        await query.answer("❌ Данные устарели, начните заново.", show_alert=True)
+        return
+
+    user_ids = context.user_data['mix_users']
+    session = Session()
+    try:
+        event = get_event_by_id(session, event_id)
+        if not event:
+            await query.edit_message_text("❌ Событие не найдено.")
+            return
+
+        users = session.query(User).filter(User.user_id.in_(user_ids)).all()
+        mix_result = await smart_mix(users, session)
+        text = format_mix_result(event.title, mix_result)
+
+        keyboard = [
+            [InlineKeyboardButton("🔄 Перемешать ещё", callback_data=f"event_mix_again:{event_id}")],
+            [InlineKeyboardButton("✅ Зафиксировать состав", callback_data=f"event_fix_lineup:{event_id}")],
+            [InlineKeyboardButton("❌ Отмена", callback_data=f"evt_detail:{event_id}")]
+        ]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+    except Exception as e:
+        logger.error(f"Event mix again error: {e}")
+        await query.answer("❌ Ошибка при повторном миксе.", show_alert=True)
+    finally:
+        session.close()
+
+
+async def event_fix_lineup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Фиксация состава после микса"""
+    query = update.callback_query
+    await query.answer()
+    event_id = int(query.data.split(':')[1])
+
+    if context.user_data.get('mix_event_id') != event_id:
+        await query.answer("❌ Данные утеряны, повторите микс.", show_alert=True)
+        return
+
+    user_ids = context.user_data['mix_users']
+    session = Session()
+    try:
+        event = get_event_by_id(session, event_id)
+        if not event:
+            await query.edit_message_text("❌ Событие не найдено.")
+            return
+
+        # Проверяем, не зафиксирован ли уже состав
+        existing_match = session.query(EventMatch).filter_by(event_id=event_id).first()
+        if existing_match:
+            await query.answer("Состав для этого события уже зафиксирован.", show_alert=True)
+            return
+
+        users = session.query(User).filter(User.user_id.in_(user_ids)).all()
+        mix_result = await smart_mix(users, session)
+
+        # Создаём запись матча
+        event_match = EventMatch(event_id=event_id)
+        session.add(event_match)
+        session.flush()  # получаем id
+
+        # Добавляем участников матча
+        for team_name, team_users in mix_result.items():
+            for u in team_users:
+                role_played = get_user_role(session, u.user_id)  # какая роль была у игрока
+                mp = MatchParticipant(
+                    match_id=event_match.id,
+                    user_id=u.user_id,
+                    team=team_name,
+                    role_played=role_played,
+                    played=(team_name != 'spectators')
+                )
+                session.add(mp)
+
+        # Обновляем статус события
+        event.status = 'lineup_fixed'
+        session.commit()
+
+        # Отправляем финальный состав в группу
+        group_id = get_group_id(context)
+        if group_id:
+            text = f"📢 <b>Состав на игру зафиксирован!</b>\n\n" + format_mix_result(event.title, mix_result)
+            await context.bot.send_message(chat_id=group_id, text=text, parse_mode="HTML")
+
+        # Возвращаемся в карточку с обновлёнными кнопками
+        query.data = f"evt_detail:{event_id}"
+        await show_event_detail(update, context)
+
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Fix lineup error: {e}")
+        await query.answer("❌ Ошибка фиксации.", show_alert=True)
+    finally:
+        session.close()
+        context.user_data.pop('mix_event_id', None)
+        context.user_data.pop('mix_users', None)
+
+
+# ==========================================
+# ОЦЕНИВАНИЕ ИГРЫ
+# ==========================================
+
+async def start_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало оценивания игроков"""
+    query = update.callback_query
+    await query.answer()
+    event_id = int(query.data.split(':')[1])
+
+    session = Session()
+    try:
+        event_match = session.query(EventMatch).filter_by(event_id=event_id).first()
+        if not event_match:
+            await query.edit_message_text("❌ Нет зафиксированного матча для этого ивента.")
+            return
+
+        # Берём участников, которые были в командах (играли)
+        participants = session.query(MatchParticipant).filter(
+            MatchParticipant.match_id == event_match.id,
+            MatchParticipant.team.in_(['red', 'blue'])
+        ).all()
+
+        if not participants:
+            await query.edit_message_text("❌ В матче нет игроков для оценки.")
+            return
+
+        # Сохраняем в user_data список id участников матча
+        rating_list = [p.id for p in participants]
+        context.user_data['rating_match_id'] = event_match.id
+        context.user_data['rating_participants'] = rating_list
+        context.user_data['rating_index'] = 0
+        context.user_data['rating_event_id'] = event_id
+
+        await show_rating_user(update, context, event_match.id, 0)
+
+    except Exception as e:
+        logger.error(f"Start rating error: {e}")
+        await query.answer("❌ Ошибка запуска оценивания.", show_alert=True)
+    finally:
+        session.close()
+
+
+async def show_rating_user(update, context, match_id, index):
+    """Показывает одного участника для оценки"""
+    session = Session()
+    try:
+        participants = context.user_data['rating_participants']
+        if index >= len(participants):
+            await finish_rating(update, context, match_id)
+            return
+
+        mp_id = participants[index]
+        mp = session.query(MatchParticipant).get(mp_id)
+        user = session.query(User).filter_by(user_id=mp.user_id).first()
+        if not user:
+            # Пропускаем
+            context.user_data['rating_index'] = index + 1
+            await show_rating_user(update, context, match_id, index + 1)
+            return
+
+        name = f"@{user.username}" if user.username else user.first_name
+        role = mp.role_played or "не указана"
+
+        text = f"📝 Оцените игру игрока:\n\n{html.escape(name)} (роль: {role})"
+        keyboard = [
+            [InlineKeyboardButton("5", callback_data=f"rate_user:{mp_id}:5"),
+             InlineKeyboardButton("4", callback_data=f"rate_user:{mp_id}:4"),
+             InlineKeyboardButton("3", callback_data=f"rate_user:{mp_id}:3")],
+            [InlineKeyboardButton("2", callback_data=f"rate_user:{mp_id}:2"),
+             InlineKeyboardButton("1", callback_data=f"rate_user:{mp_id}:1"),
+             InlineKeyboardButton("❌ Не играл", callback_data=f"rate_user_not_played:{mp_id}")],
+            [InlineKeyboardButton("⏭ Пропустить", callback_data=f"rate_skip:{match_id}"),
+             InlineKeyboardButton("🏁 Завершить", callback_data=f"rate_finish:{match_id}")]
+        ]
+        await (update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+               if update.callback_query else update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML"))
+    except Exception as e:
+        logger.error(f"Show rating user error: {e}")
+        await update.callback_query.answer("❌ Ошибка отображения.", show_alert=True)
+    finally:
+        session.close()
+
+
+async def rate_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data.split(':')
+    mp_id = int(data[1])
+    rating = int(data[2])
+
+    session = Session()
+    try:
+        mp = session.query(MatchParticipant).get(mp_id)
+        if not mp:
+            await query.answer("Ошибка: участник не найден", show_alert=True)
+            return
+
+        # Проверяем, не оценивал ли уже этот админ данного участника в этом матче
+        existing = session.query(RoleRating).filter_by(
+            match_participant_id=mp_id,
+            rated_by=query.from_user.id
+        ).first()
+        if existing:
+            await query.answer("Вы уже оценили этого игрока в этом матче.", show_alert=True)
+            return
+
+        rating_entry = RoleRating(
+            match_participant_id=mp_id,
+            user_id=mp.user_id,
+            rating=rating,
+            rated_by=query.from_user.id
+        )
+        session.add(rating_entry)
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Rating error: {e}")
+        await query.answer("❌ Ошибка сохранения оценки.", show_alert=True)
+    finally:
+        session.close()
+
+    await rate_next(update, context)
+
+
+async def rate_user_not_played(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    mp_id = int(query.data.split(':')[1])
+
+    session = Session()
+    try:
+        mp = session.query(MatchParticipant).get(mp_id)
+        if mp:
+            mp.played = False
+            session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Rate not played error: {e}")
+    finally:
+        session.close()
+
+    await rate_next(update, context)
+
+
+async def rate_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    index = context.user_data.get('rating_index', 0) + 1
+    context.user_data['rating_index'] = index
+    match_id = context.user_data['rating_match_id']
+    await show_rating_user(update, context, match_id, index)
+
+
+async def rate_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await rate_next(update, context)
+
+
+async def rate_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    match_id = context.user_data['rating_match_id']
+    await finish_rating(update, context, match_id)
+
+
+async def finish_rating(update, context, match_id):
+    event_id = context.user_data.get('rating_event_id')
+    context.user_data.clear()
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            "✅ Оценивание завершено. Спасибо!",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 К событию", callback_data=f"evt_detail:{event_id}")]
+            ])
+        )
+    else:
+        await update.message.reply_text("✅ Оценивание завершено.")
+
+
+# ==========================================
+# ЗАВЕРШЕНИЕ ИВЕНТА
+# ==========================================
+
+async def complete_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    event_id = int(query.data.split(':')[1])
+
+    session = Session()
+    try:
+        event = get_event_by_id(session, event_id)
+        if not event:
+            await query.edit_message_text("❌ Событие не найдено.")
+            return
+        if event.status == 'completed':
+            await query.answer("Ивент уже завершён.", show_alert=True)
+            return
+    finally:
+        session.close()
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, завершить", callback_data=f"confirm_complete:{event_id}")],
+        [InlineKeyboardButton("❌ Нет", callback_data=f"evt_detail:{event_id}")]
+    ]
+    await query.edit_message_text(
+        "❓ Вы уверены, что хотите завершить ивент? Это действие нельзя отменить.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def confirm_complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    event_id = int(query.data.split(':')[1])
+
+    session = Session()
+    try:
+        event = session.query(Event).get(event_id)
+        if event:
+            event.status = 'completed'
+            session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Confirm complete error: {e}")
+        await query.answer("❌ Ошибка завершения.", show_alert=True)
+        return
+    finally:
+        session.close()
+
+    query.data = f"evt_detail:{event_id}"
+    await show_event_detail(update, context)
+
+
+# ==========================================
 # ПЛАНИРОВЩИК
 # ==========================================
 
@@ -745,10 +1216,11 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
         now_str = now_msk.strftime(DATE_FORMAT)
         window = (now_msk + timedelta(minutes=1)).strftime(DATE_FORMAT)
 
+        # Ищем события, которые должны начаться в ближайшую минуту и ещё не завершены
         events = session.query(Event).filter(
             Event.event_time >= now_str,
             Event.event_time <= window,
-            Event.status == 'Scheduled'
+            Event.status != 'completed'
         ).all()
 
         if not events:
@@ -784,9 +1256,7 @@ async def check_and_notify_events(context: ContextTypes.DEFAULT_TYPE):
             for block in notify_blocks:
                 await context.bot.send_message(chat_id=group_id, text=block, parse_mode="HTML")
 
-            ev.status = 'Done'
-
-        session.commit()
+            # Не меняем статус, оставляем как есть
 
     except Exception as e:
         logger.error(f"Scheduler error: {e}")

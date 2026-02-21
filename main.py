@@ -45,6 +45,9 @@ from events.handlers import (
     delete_event, back_to_events_list,
     edit_event_start, edit_title_start, edit_time_start, 
     cancel_edit, receive_edited_title,
+    event_mix, event_mix_again, event_fix_lineup,
+    start_rating, rate_user, rate_user_not_played,
+    rate_skip, rate_finish, complete_event, confirm_complete,
     check_and_notify_events
 )
 # Импорты из папки announcement
@@ -53,7 +56,6 @@ from announcement.handlers import (
     announce_confirm, announce_edit, announce_cancel
 )
 from scheduler import start_scheduler
-from tournament import tournament_menu, mix_conv_handler
 
 
 # ==========================================
@@ -190,9 +192,8 @@ def main():
     application.add_handler(CallbackQueryHandler(reg_menu, pattern=f"^{state.CD_MENU_REG}$"))
     application.add_handler(CallbackQueryHandler(tag_menu, pattern=f"^{state.CD_MENU_TAG}$"))
     application.add_handler(CallbackQueryHandler(events_menu, pattern=f"^{state.CD_MENU_CRM}$"))
-    application.add_handler(CallbackQueryHandler(tournament_menu, pattern=f"^{state.CD_MENU_TOURNAMENT}$"))
-    application.add_handler(CallbackQueryHandler(settings_menu, pattern=f"^{state.CD_MENU_SETTINGS}$"))
     application.add_handler(CallbackQueryHandler(back_to_menu_handler, pattern=f"^{state.CD_BACK_TO_MENU}$"))
+    application.add_handler(CallbackQueryHandler(settings_menu, pattern=f"^{state.CD_MENU_SETTINGS}$"))
     
     # ==========================================
     # 5. Регистрация
@@ -244,13 +245,27 @@ def main():
     application.add_handler(CallbackQueryHandler(cancel_edit, pattern="^evt_edit_cancel$"))
     
     # ==========================================
-    # 8. Микс (Турнир)
+    # 7.1. Умный микс, фиксация состава и оценивание (НОВЫЕ ХЕНДЛЕРЫ)
     # ==========================================
     
-    application.add_handler(mix_conv_handler)
+    # Микс внутри ивента
+    application.add_handler(CallbackQueryHandler(event_mix, pattern="^event_mix:"))
+    application.add_handler(CallbackQueryHandler(event_mix_again, pattern="^event_mix_again:"))
+    application.add_handler(CallbackQueryHandler(event_fix_lineup, pattern="^event_fix_lineup:"))
+    
+    # Оценивание игры
+    application.add_handler(CallbackQueryHandler(start_rating, pattern="^event_rate:"))
+    application.add_handler(CallbackQueryHandler(rate_user, pattern="^rate_user:"))
+    application.add_handler(CallbackQueryHandler(rate_user_not_played, pattern="^rate_user_not_played:"))
+    application.add_handler(CallbackQueryHandler(rate_skip, pattern="^rate_skip:"))
+    application.add_handler(CallbackQueryHandler(rate_finish, pattern="^rate_finish:"))
+    
+    # Завершение ивента
+    application.add_handler(CallbackQueryHandler(complete_event, pattern="^event_complete:"))
+    application.add_handler(CallbackQueryHandler(confirm_complete, pattern="^confirm_complete:"))
     
     # ==========================================
-    # 9. Настройки (ДопФункционал)
+    # 8. Настройки (ДопФункционал)
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(settings_del_user_start, pattern="^settings_del_user$"))
@@ -258,7 +273,7 @@ def main():
     application.add_handler(CallbackQueryHandler(announce_start, pattern="^settings_announce$"))
     
     # ==========================================
-    # 9.1. Обработчики объявлений
+    # 8.1. Обработчики объявлений
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(announce_confirm, pattern="^announce_confirm$"))
@@ -266,7 +281,7 @@ def main():
     application.add_handler(CallbackQueryHandler(announce_cancel, pattern="^announce_cancel$"))
     
     # ==========================================
-    # 10. Текстовый ввод (ЛС)
+    # 9. Текстовый ввод (ЛС)
     # ==========================================
     
     application.add_handler(

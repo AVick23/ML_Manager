@@ -5,8 +5,7 @@ keyboards.py
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from datetime import datetime, timedelta
 
-from db import Session, User
-from .utils import DATE_FORMAT, MSK_TZ, get_event_participants, format_user_mention
+from .utils import DATE_FORMAT, MSK_TZ
 import state
 
 # ==========================================
@@ -17,13 +16,10 @@ def get_events_list_kb(events, is_admin: bool) -> InlineKeyboardMarkup:
     """Клавиатура списка событий (Главная страница модуля)"""
     keyboard = []
     
-    if not events:
-        text = "🗓 Список пуст"
-    else:
+    if events:
         for ev in events:
             ev_time = datetime.strptime(ev.event_time, DATE_FORMAT)
             time_str = ev_time.strftime("%d.%m %H:%M")
-            # Компактный формат кнопки
             btn_text = f"🗓 {ev.title} • {time_str}"
             keyboard.append([
                 InlineKeyboardButton(btn_text, callback_data=f"evt_detail:{ev.id}")
@@ -43,11 +39,17 @@ def get_events_list_kb(events, is_admin: bool) -> InlineKeyboardMarkup:
 # Клавиатура деталировки события
 # ==========================================
 
-def get_event_detail_kb(event_id: int, is_joined: bool, is_admin: bool) -> InlineKeyboardMarkup:
+def get_event_detail_kb(event_id: int, is_joined: bool, is_admin: bool, 
+                        event_status: str, has_lineup: bool = False) -> InlineKeyboardMarkup:
     """Клавиатура просмотра конкретного события"""
     keyboard = []
     
-    # Основное действие
+    # Если событие завершено – только кнопка назад
+    if event_status == 'completed':
+        keyboard.append([InlineKeyboardButton("⬅️ К списку", callback_data="back_to_evt_list")])
+        return InlineKeyboardMarkup(keyboard)
+    
+    # Кнопка записи/отписки (доступна всегда, пока ивент не завершён)
     if is_joined:
         keyboard.append([
             InlineKeyboardButton("❌ Отписаться", callback_data=f"event_leave:{event_id}")
@@ -57,8 +59,17 @@ def get_event_detail_kb(event_id: int, is_joined: bool, is_admin: bool) -> Inlin
             InlineKeyboardButton("✅ Записаться", callback_data=f"event_join:{event_id}")
         ])
     
-    # Админ-функция: Ряд с кнопками Редактировать и Удалить
+    # Админские кнопки
     if is_admin:
+        if event_status == 'active' and not has_lineup:
+            # Этап: можно делать микс
+            keyboard.append([InlineKeyboardButton("🎲 Умный микс", callback_data=f"event_mix:{event_id}")])
+        elif event_status == 'active' and has_lineup:
+            # Этап: состав зафиксирован, можно оценивать и завершать
+            keyboard.append([InlineKeyboardButton("📝 Оценить игру", callback_data=f"event_rate:{event_id}")])
+            keyboard.append([InlineKeyboardButton("✅ Завершить ивент", callback_data=f"event_complete:{event_id}")])
+        
+        # Кнопки редактирования и удаления (доступны всегда, пока ивент не завершён)
         admin_row = [
             InlineKeyboardButton("✏️ Редактировать", callback_data=f"evt_edit:{event_id}"),
             InlineKeyboardButton("🗑 Удалить", callback_data=f"evt_del:{event_id}")
