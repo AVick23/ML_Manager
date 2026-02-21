@@ -61,20 +61,23 @@ def get_event_detail_kb(event_id: int, is_joined: bool, is_admin: bool,
     
     # Админские кнопки
     if is_admin:
+        # Этап: можно делать микс (событие активно и нет зафиксированного состава)
         if event_status == 'active' and not has_lineup:
-            # Этап: можно делать микс
             keyboard.append([InlineKeyboardButton("🎲 Умный микс", callback_data=f"event_mix:{event_id}")])
-        elif event_status == 'active' and has_lineup:
-            # Этап: состав зафиксирован, можно оценивать и завершать
+        
+        # Этап: состав зафиксирован, можно оценивать и завершать
+        # Показываем кнопки оценивания и завершения, если состав зафиксирован и событие не завершено
+        if has_lineup and event_status != 'completed':
             keyboard.append([InlineKeyboardButton("📝 Оценить игру", callback_data=f"event_rate:{event_id}")])
             keyboard.append([InlineKeyboardButton("✅ Завершить ивент", callback_data=f"event_complete:{event_id}")])
         
         # Кнопки редактирования и удаления (доступны всегда, пока ивент не завершён)
-        admin_row = [
-            InlineKeyboardButton("✏️ Редактировать", callback_data=f"evt_edit:{event_id}"),
-            InlineKeyboardButton("🗑 Удалить", callback_data=f"evt_del:{event_id}")
-        ]
-        keyboard.append(admin_row)
+        if event_status != 'completed':
+            admin_row = [
+                InlineKeyboardButton("✏️ Редактировать", callback_data=f"evt_edit:{event_id}"),
+                InlineKeyboardButton("🗑 Удалить", callback_data=f"evt_del:{event_id}")
+            ]
+            keyboard.append(admin_row)
     
     keyboard.append([InlineKeyboardButton("⬅️ К списку", callback_data="back_to_evt_list")])
     
