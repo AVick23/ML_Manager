@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from db import ROLE_NAMES
+
 from db import (
     Session, Event, EventParticipant, User,
     EventMatch, MatchParticipant, RoleRating,
@@ -27,6 +29,52 @@ from events.keyboards import (
     get_create_date_kb, get_create_hour_kb, get_create_minute_kb
 )
 
+
+async def _display_event_detail(query, event_id, context):
+    """Отображает детали события, используя переданный query и event_id"""
+    user_id = query.from_user.id
+    is_admin = user_id in ADMIN_IDS
+
+    session = Session()
+    try:
+        event = get_event_by_id(session, event_id)
+        if not event:
+            await query.edit_message_text("❌ Событие не найдено или удалено.")
+            return
+
+        ev_time = datetime.strptime(event.event_time, DATE_FORMAT)
+        time_str = ev_time.strftime("%d %b %Y, %H:%M")
+        participants = get_event_participants(session, event_id)
+        is_joined = is_user_participant(session, event_id, user_id)
+        has_lineup = session.query(EventMatch).filter_by(event_id=event_id).first() is not None
+        safe_title = html.escape(event.title)
+
+        lines = [
+            f"🎯 <b>{safe_title}</b>",
+            f"🕒 <b>Время:</b> {time_str} (МСК)",
+            f"\n-------------------"
+        ]
+
+        if not participants:
+            lines.append("\n👻 <b>Участников пока нет</b>\nСтаньте первым!")
+        else:
+            lines.append(f"\n👥 <b>Участники ({len(participants)}):</b>")
+            p_user_ids = [p.user_id for p in participants]
+            users = session.query(User).filter(User.user_id.in_(p_user_ids)).all() if p_user_ids else []
+            user_map = {u.user_id: u for u in users}
+            for i, p in enumerate(participants, 1):
+                u = user_map.get(p.user_id)
+                lines.append(f"{i}. {format_user_mention(u)}")
+
+        reply_markup = get_event_detail_kb(event_id, is_joined, is_admin, event.status, has_lineup)
+
+        await query.edit_message_text(
+            "\n".join(lines),
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+    finally:
+        session.close()
 
 # ==========================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ФОРМАТИРОВАНИЯ
@@ -84,57 +132,8 @@ async def show_event_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает детали события с актуальным списком участников"""
     query = update.callback_query
     await query.answer()
-
     event_id = int(query.data.split(":")[1])
-    user_id = query.from_user.id
-    is_admin = user_id in ADMIN_IDS
-
-    session = Session()
-    try:
-        event = get_event_by_id(session, event_id)
-        if not event:
-            return await query.edit_message_text("❌ Событие не найдено или удалено.")
-
-        ev_time = datetime.strptime(event.event_time, DATE_FORMAT)
-        time_str = ev_time.strftime("%d %b %Y, %H:%M")
-        participants = get_event_participants(session, event_id)
-        is_joined = is_user_participant(session, event_id, user_id)
-
-        # Проверяем, есть ли уже зафиксированный состав
-        has_lineup = session.query(EventMatch).filter_by(event_id=event_id).first() is not None
-
-        # Экранируем название события
-        safe_title = html.escape(event.title)
-
-        lines = [
-            f"🎯 <b>{safe_title}</b>",
-            f"🕒 <b>Время:</b> {time_str} (МСК)",
-            f"\n-------------------"
-        ]
-
-        if not participants:
-            lines.append("\n👻 <b>Участников пока нет</b>\nСтаньте первым!")
-        else:
-            lines.append(f"\n👥 <b>Участники ({len(participants)}):</b>")
-
-            p_user_ids = [p.user_id for p in participants]
-            users = session.query(User).filter(User.user_id.in_(p_user_ids)).all() if p_user_ids else []
-            user_map = {u.user_id: u for u in users}
-
-            for i, p in enumerate(participants, 1):
-                u = user_map.get(p.user_id)
-                lines.append(f"{i}. {format_user_mention(u)}")
-
-        reply_markup = get_event_detail_kb(event_id, is_joined, is_admin, event.status, has_lineup)
-
-        await query.edit_message_text(
-            "\n".join(lines),
-            reply_markup=reply_markup,
-            parse_mode="HTML"
-        )
-
-    finally:
-        session.close()
+    await _display_event_detail(query, event_id, context)
 
 
 async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -196,8 +195,7 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.answer(action_text)
 
         # Обновляем карточку
-        query.data = f"evt_detail:{event_id}"
-        await show_event_detail(update, context)
+        await _display_event_detail(query, event_id, context)
 
     except Exception as e:
         session.rollback()
@@ -630,8 +628,7 @@ async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     event_id = context.user_data.get("editing_event_id")
     context.user_data.clear()
     if event_id:
-        query.data = f"evt_detail:{event_id}"
-        await show_event_detail(update, context)
+        await _display_event_detail(query, event_id, context)
     else:
         await events_menu(update, context)
 
@@ -793,27 +790,33 @@ async def smart_mix(users, session):
     return {'red': red[:5], 'blue': blue[:5], 'spectators': spectators}
 
 
-def format_mix_result(event_title, mix_result):
-    """Форматирует результат микса в HTML"""
+def format_mix_result(event_title, mix_result, session):
+    """Форматирует результат микса в HTML с указанием ролей"""
     lines = [f"🎯 <b>{html.escape(event_title)}</b>\n"]
 
     if mix_result['red']:
         lines.append("\n🔴 <b>КОМАНДА RED</b>")
         for u in mix_result['red']:
             name = f"@{u.username}" if u.username else u.first_name
-            lines.append(f"• {html.escape(name)}")
+            role_key = get_user_role(session, u.user_id)
+            role_name = ROLE_NAMES.get(role_key, "нет роли") if role_key else "нет роли"
+            lines.append(f"• {html.escape(name)} — <i>{role_name}</i>")
 
     if mix_result['blue']:
         lines.append("\n🔵 <b>КОМАНДА BLUE</b>")
         for u in mix_result['blue']:
             name = f"@{u.username}" if u.username else u.first_name
-            lines.append(f"• {html.escape(name)}")
+            role_key = get_user_role(session, u.user_id)
+            role_name = ROLE_NAMES.get(role_key, "нет роли") if role_key else "нет роли"
+            lines.append(f"• {html.escape(name)} — <i>{role_name}</i>")
 
     if mix_result['spectators']:
         lines.append("\n👀 <b>ЗРИТЕЛИ</b>")
         for u in mix_result['spectators']:
             name = f"@{u.username}" if u.username else u.first_name
-            lines.append(f"• {html.escape(name)}")
+            role_key = get_user_role(session, u.user_id)
+            role_name = ROLE_NAMES.get(role_key, "нет роли") if role_key else "нет роли"
+            lines.append(f"• {html.escape(name)} — <i>{role_name}</i>")
 
     return "\n".join(lines)
 
@@ -854,7 +857,7 @@ async def event_mix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['mix_event_id'] = event_id
 
         mix_result = await smart_mix(users, session)
-        text = format_mix_result(event.title, mix_result)
+        text = format_mix_result(event.title, mix_result, session)
 
         keyboard = [
             [InlineKeyboardButton("🔄 Перемешать ещё", callback_data=f"event_mix_again:{event_id}")],
@@ -958,12 +961,11 @@ async def event_fix_lineup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Отправляем финальный состав в группу
         group_id = get_group_id(context)
         if group_id:
-            text = f"📢 <b>Состав на игру зафиксирован!</b>\n\n" + format_mix_result(event.title, mix_result)
+            text = f"📢 <b>Состав на игру зафиксирован!</b>\n\n" + format_mix_result(event.title, mix_result, session)
             await context.bot.send_message(chat_id=group_id, text=text, parse_mode="HTML")
 
         # Возвращаемся в карточку с обновлёнными кнопками
-        query.data = f"evt_detail:{event_id}"
-        await show_event_detail(update, context)
+        await _display_event_detail(query, event_id, context)
 
     except Exception as e:
         session.rollback()
@@ -1201,8 +1203,8 @@ async def confirm_complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
 
-    query.data = f"evt_detail:{event_id}"
-    await show_event_detail(update, context)
+    # Вместо изменения query.data вызываем _display_event_detail
+    await _display_event_detail(query, event_id, context)
 
 
 # ==========================================
