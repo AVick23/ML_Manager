@@ -44,8 +44,13 @@ from events.handlers import (
     back_to_day, back_to_hour, cancel_creation,
     delete_event, back_to_events_list,
     edit_event_start, edit_title_start, edit_time_start, 
-    cancel_edit, receive_edited_title,  # новые обработчики
+    cancel_edit, receive_edited_title,
     check_and_notify_events
+)
+# Импорты из папки announcement
+from announcement.handlers import (
+    announce_start, receive_announce_text,
+    announce_confirm, announce_edit, announce_cancel
 )
 from scheduler import start_scheduler
 from tournament import tournament_menu, mix_conv_handler
@@ -59,8 +64,10 @@ async def dispatch_private_text(update: Update, context: ContextTypes.DEFAULT_TY
     """Перенаправляет текстовые сообщения в зависимости от состояния пользователя"""
     u_state = context.user_data
     
-    # Важно: проверяем состояния в порядке приоритета
-    if "state" in u_state and u_state["state"] == "EDITING_TITLE":
+    # Проверяем состояния в порядке приоритета
+    if u_state.get("announce_state") == "awaiting_announce_text":
+        await receive_announce_text(update, context)
+    elif "state" in u_state and u_state["state"] == "EDITING_TITLE":
         await receive_edited_title(update, context)
     elif "crm_state" in u_state and u_state["crm_state"]:
         await handle_crm_input(update, context)
@@ -230,10 +237,7 @@ def main():
     # Удаление (Админ)
     application.add_handler(CallbackQueryHandler(delete_event, pattern=r"^evt_del:"))
     
-    # ==========================================
-    # 7.1. РЕДАКТИРОВАНИЕ СОБЫТИЙ (НОВЫЕ ОБРАБОТЧИКИ)
-    # ==========================================
-    
+    # Редактирование событий
     application.add_handler(CallbackQueryHandler(edit_event_start, pattern="^evt_edit:"))
     application.add_handler(CallbackQueryHandler(edit_title_start, pattern="^evt_edit_title$"))
     application.add_handler(CallbackQueryHandler(edit_time_start, pattern="^evt_edit_time$"))
@@ -246,11 +250,20 @@ def main():
     application.add_handler(mix_conv_handler)
     
     # ==========================================
-    # 9. Настройки
+    # 9. Настройки (ДопФункционал)
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(settings_del_user_start, pattern="^settings_del_user$"))
     application.add_handler(CallbackQueryHandler(settings_info, pattern="^settings_info$"))
+    application.add_handler(CallbackQueryHandler(announce_start, pattern="^settings_announce$"))
+    
+    # ==========================================
+    # 9.1. Обработчики объявлений
+    # ==========================================
+    
+    application.add_handler(CallbackQueryHandler(announce_confirm, pattern="^announce_confirm$"))
+    application.add_handler(CallbackQueryHandler(announce_edit, pattern="^announce_edit$"))
+    application.add_handler(CallbackQueryHandler(announce_cancel, pattern="^announce_cancel$"))
     
     # ==========================================
     # 10. Текстовый ввод (ЛС)

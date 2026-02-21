@@ -6,10 +6,10 @@ from telegram.ext import ContextTypes
 
 from config import ADMIN_IDS, logger
 from db import (
-    get_all_users,
     ROLE_NAMES, ROLE_TO_MODEL, Session, User
 )
 import state
+from announcement.handlers import announce_start  # <-- импортируем новый обработчик
 
 
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -18,14 +18,13 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     user_id = query.from_user.id
-    
     if user_id not in ADMIN_IDS:
         await query.edit_message_text("❌ Эта функция доступна только администраторам.")
         return
 
     text = (
-        "⚙️ **Настройки и Утилиты**\n\n"
-        "Управление базой данных и документация."
+        "⚙️ <b>ДопФункционал</b>\n\n"
+        "Управление базой данных, документация и объявления."
     )
     
     keyboard = [
@@ -33,12 +32,12 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🗑 Удалить игрока (Из базы)", callback_data="settings_del_user"),
             InlineKeyboardButton("ℹ️ Инструкция", callback_data="settings_info")
         ],
+        [InlineKeyboardButton("📢 Объявить информацию", callback_data="settings_announce")],
         [InlineKeyboardButton("⬅ Назад в меню", callback_data=state.CD_BACK_TO_MENU)]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def settings_del_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Запуск процедуры полного удаления игрока"""

@@ -47,7 +47,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_admin:
         text = "🛠 <b>Панель Администратора</b>\n\nУ вас есть полный доступ к управлению."
-        
         keyboard = [
             [
                 InlineKeyboardButton("👥 Список игроков", callback_data=state.CD_MENU_PLAYERS),
@@ -59,7 +58,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
             [
                 InlineKeyboardButton("📢 Тегнуть игроков", callback_data=state.CD_MENU_TAG),
-                InlineKeyboardButton("⚙️ Настройки", callback_data=state.CD_MENU_SETTINGS)
+                InlineKeyboardButton("⚙️ ДопФункционал", callback_data=state.CD_MENU_SETTINGS)  # <-- изменено
             ]
         ]
     else:
