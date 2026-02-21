@@ -57,11 +57,13 @@ def get_event_detail_kb(event_id: int, is_joined: bool, is_admin: bool) -> Inlin
             InlineKeyboardButton("✅ Записаться", callback_data=f"event_join:{event_id}")
         ])
     
-    # Админ-функция: Удалить
+    # Админ-функция: Ряд с кнопками Редактировать и Удалить
     if is_admin:
-        keyboard.append([
-            InlineKeyboardButton("🗑 Удалить игру", callback_data=f"evt_del:{event_id}")
-        ])
+        admin_row = [
+            InlineKeyboardButton("✏️ Редактировать", callback_data=f"evt_edit:{event_id}"),
+            InlineKeyboardButton("🗑 Удалить", callback_data=f"evt_del:{event_id}")
+        ]
+        keyboard.append(admin_row)
     
     keyboard.append([InlineKeyboardButton("⬅️ К списку", callback_data="back_to_evt_list")])
     

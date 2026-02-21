@@ -36,13 +36,15 @@ from tag_players import (
     tag_menu, teg_view_role_handler, teg_single_user_handler,
     teg_all_users_handler, teg_back_handler
 )
-# Импорты из папки events (новая структура)
+# Импорты из папки events
 from events.handlers import (
     events_menu, show_event_detail, handle_event_action,
     create_event_start, handle_text_input as handle_crm_input,
     select_day, select_hour, select_minute,
     back_to_day, back_to_hour, cancel_creation,
     delete_event, back_to_events_list,
+    edit_event_start, edit_title_start, edit_time_start, 
+    cancel_edit, receive_edited_title,  # новые обработчики
     check_and_notify_events
 )
 from scheduler import start_scheduler
@@ -57,7 +59,10 @@ async def dispatch_private_text(update: Update, context: ContextTypes.DEFAULT_TY
     """Перенаправляет текстовые сообщения в зависимости от состояния пользователя"""
     u_state = context.user_data
     
-    if "crm_state" in u_state and u_state["crm_state"]:
+    # Важно: проверяем состояния в порядке приоритета
+    if "state" in u_state and u_state["state"] == "EDITING_TITLE":
+        await receive_edited_title(update, context)
+    elif "crm_state" in u_state and u_state["crm_state"]:
         await handle_crm_input(update, context)
     elif "settings_state" in u_state and u_state["settings_state"]:
         await handle_global_delete_input(update, context)
@@ -196,7 +201,7 @@ def main():
     application.add_handler(CallbackQueryHandler(back_to_roles_handler, pattern=f"^{state.CD_BACK_TO_ROLES}$"))
     
     # ==========================================
-    # 6. Теги (Обновлено)
+    # 6. Теги
     # ==========================================
     
     application.add_handler(CallbackQueryHandler(teg_view_role_handler, pattern=f"^{state.CD_TEG_ROLE}:"))
@@ -205,9 +210,10 @@ def main():
     application.add_handler(CallbackQueryHandler(teg_back_handler, pattern=f"^{state.CD_TEG_BACK}$"))
     
     # ==========================================
-    # 7. События (Events)
+    # 7. События (Events) - ОСНОВНАЯ ЧАСТЬ
     # ==========================================
     
+    # Просмотр и действия
     application.add_handler(CallbackQueryHandler(show_event_detail, pattern=r"^evt_detail:"))
     application.add_handler(CallbackQueryHandler(handle_event_action, pattern=r"^event_(join|leave):"))
     application.add_handler(CallbackQueryHandler(back_to_events_list, pattern="^back_to_evt_list$"))
@@ -223,6 +229,15 @@ def main():
     
     # Удаление (Админ)
     application.add_handler(CallbackQueryHandler(delete_event, pattern=r"^evt_del:"))
+    
+    # ==========================================
+    # 7.1. РЕДАКТИРОВАНИЕ СОБЫТИЙ (НОВЫЕ ОБРАБОТЧИКИ)
+    # ==========================================
+    
+    application.add_handler(CallbackQueryHandler(edit_event_start, pattern="^evt_edit:"))
+    application.add_handler(CallbackQueryHandler(edit_title_start, pattern="^evt_edit_title$"))
+    application.add_handler(CallbackQueryHandler(edit_time_start, pattern="^evt_edit_time$"))
+    application.add_handler(CallbackQueryHandler(cancel_edit, pattern="^evt_edit_cancel$"))
     
     # ==========================================
     # 8. Микс (Турнир)
