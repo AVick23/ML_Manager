@@ -464,6 +464,8 @@ async def edit_time_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Событие не найдено.")
             return
         title = event.title
+        # !!! ВАЖНО: сохраняем название в user_data, чтобы оно было доступно в select_minute
+        context.user_data["event_title"] = title
     finally:
         session.close()
 
