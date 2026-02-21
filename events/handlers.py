@@ -75,6 +75,7 @@ async def events_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 
 async def show_event_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает детали события с актуальным списком участников"""
     query = update.callback_query
     await query.answer()
 
@@ -128,12 +129,14 @@ async def show_event_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает запись/отписку от события"""
     query = update.callback_query
     await query.answer()
 
     action, event_id_str = query.data.split(":")
     event_id = int(event_id_str)
     user_id = query.from_user.id
+    tg_user = query.from_user
 
     session = Session()
     try:
@@ -145,20 +148,27 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
             event_id=event_id, user_id=user_id
         ).first()
 
+        action_text = ""
+        participants_count = 0
+
         if action == "event_join":
             if existing:
                 return await query.answer("Вы уже записаны!")
 
             session.add(EventParticipant(event_id=event_id, user_id=user_id))
-            await save_user_from_tg(query.from_user)
+            await save_user_from_tg(tg_user)
 
             # Получаем актуальное количество участников после добавления
             participants_count = session.query(EventParticipant).filter_by(event_id=event_id).count()
             logger.info(f"✅ User {user_id} joined event {event_id}")
-            await query.answer(f"✅ Вы записаны! Всего участников: {participants_count}")
-
+            
+            # Отправляем личное сообщение пользователю
+            await send_private_confirmation(context, tg_user, event, "join", participants_count)
+            
             # Уведомление в группу
-            await notify_group_about_join(context, event, query.from_user)
+            await notify_group_about_join(context, event, tg_user)
+            
+            action_text = f"✅ Вы записаны! Всего участников: {participants_count}"
 
         elif action == "event_leave":
             if existing:
@@ -166,14 +176,21 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
                 # Получаем актуальное количество участников после удаления
                 participants_count = session.query(EventParticipant).filter_by(event_id=event_id).count()
                 logger.info(f"❌ User {user_id} left event {event_id}")
-                await query.answer(f"❌ Вы отписались. Осталось участников: {participants_count}")
-
+                
+                # Отправляем личное сообщение пользователю
+                await send_private_confirmation(context, tg_user, event, "leave", participants_count)
+                
                 # Уведомление в группу
-                await notify_group_about_leave(context, event, query.from_user)
+                await notify_group_about_leave(context, event, tg_user)
+                
+                action_text = f"❌ Вы отписались. Осталось участников: {participants_count}"
             else:
                 return await query.answer("Вы не были записаны.")
 
         session.commit()
+
+        # Показываем всплывающее уведомление
+        await query.answer(action_text)
 
         # Обновляем сообщение с деталями события
         query.data = f"evt_detail:{event_id}"
@@ -185,6 +202,40 @@ async def handle_event_action(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.answer("Ошибка обработки.", show_alert=True)
     finally:
         session.close()
+
+
+async def send_private_confirmation(context, tg_user, event, action, participants_count):
+    """Отправляет подтверждение пользователю в личные сообщения"""
+    safe_title = html.escape(event.title)
+    mention = format_user_mention_from_tg(tg_user)
+    
+    if action == "join":
+        text = (
+            f"✅ <b>Вы успешно записались на игру!</b>\n\n"
+            f"🎯 {safe_title}\n"
+            f"🕒 {event.event_time} (МСК)\n"
+            f"👥 Всего участников: {participants_count}\n\n"
+            f"📢 Уведомление о начале игры придёт в группу.\n"
+            f"Удачной игры! ⚔️"
+        )
+    else:  # leave
+        text = (
+            f"❌ <b>Вы отписались от игры</b>\n\n"
+            f"🎯 {safe_title}\n"
+            f"🕒 {event.event_time} (МСК)\n"
+            f"👥 Осталось участников: {participants_count}\n\n"
+            f"Жаль, что не получится сыграть. В следующий раз обязательно присоединяйтесь! 👋"
+        )
+    
+    try:
+        await context.bot.send_message(
+            chat_id=tg_user.id,
+            text=text,
+            parse_mode="HTML"
+        )
+        logger.info(f"📨 Private confirmation sent to {tg_user.id} for {action}")
+    except Exception as e:
+        logger.warning(f"Failed to send private confirmation to {tg_user.id}: {e}")
 
 
 async def notify_group_about_join(context, event, tg_user):
