@@ -338,6 +338,8 @@ async def select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             event.event_time = event_time_str
             session.commit()
             safe_title = html.escape(event.title)
+
+            # Сообщение админу
             await query.edit_message_text(
                 f"✅ <b>Время события изменено</b>\n\n"
                 f"🎯 {safe_title}\n"
@@ -349,6 +351,22 @@ async def select_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML"
             )
             logger.info(f"✏️ Admin {query.from_user.id} changed event {editing_event_id} time: {old_time} -> {event_time_str}")
+
+            # Уведомление в группу об изменении времени
+            group_id = get_group_id(context)
+            if group_id:
+                try:
+                    group_text = (
+                        f"🕒 <b>Время игры изменено!</b>\n\n"
+                        f"🎯 {safe_title}\n"
+                        f"Старое время: {old_time}\n"
+                        f"Новое время: {event_time_str}\n\n"
+                        f"Изменено администратором."
+                    )
+                    await context.bot.send_message(chat_id=group_id, text=group_text, parse_mode="HTML")
+                except Exception as e:
+                    logger.warning(f"Group notification error (time edit): {e}")
+
             context.user_data.clear()
             return
         else:
@@ -464,7 +482,7 @@ async def edit_time_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Событие не найдено.")
             return
         title = event.title
-        # !!! ВАЖНО: сохраняем название в user_data, чтобы оно было доступно в select_minute
+        # Сохраняем название в user_data, чтобы оно было доступно в select_minute
         context.user_data["event_title"] = title
     finally:
         session.close()
@@ -503,9 +521,12 @@ async def receive_edited_title(update: Update, context: ContextTypes.DEFAULT_TYP
         event.title = new_title
         session.commit()
         safe_new = html.escape(new_title)
+        old_title_safe = html.escape(old_title)
+
+        # Сообщение админу
         await update.message.reply_text(
             f"✅ <b>Название изменено</b>\n\n"
-            f"Старое: {html.escape(old_title)}\n"
+            f"Старое: {old_title_safe}\n"
             f"Новое: {safe_new}",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 К событию", callback_data=f"evt_detail:{event_id}")]
@@ -513,6 +534,21 @@ async def receive_edited_title(update: Update, context: ContextTypes.DEFAULT_TYP
             parse_mode="HTML"
         )
         logger.info(f"✏️ Admin {user_id} renamed event {event_id}: '{old_title}' -> '{new_title}'")
+
+        # Уведомление в группу об изменении названия
+        group_id = get_group_id(context)
+        if group_id:
+            try:
+                group_text = (
+                    f"📝 <b>Название игры изменено!</b>\n\n"
+                    f"Старое название: {old_title_safe}\n"
+                    f"Новое название: {safe_new}\n\n"
+                    f"Изменено администратором."
+                )
+                await context.bot.send_message(chat_id=group_id, text=group_text, parse_mode="HTML")
+            except Exception as e:
+                logger.warning(f"Group notification error (title edit): {e}")
+
     except Exception as e:
         session.rollback()
         logger.error(f"Error renaming event: {e}")
